@@ -117,6 +117,23 @@ async def main(config_path: str):
         # Cleanup
         logger.info("Cleaning up...")
         await maker.stop()
+        
+        # Cancel all open orders on exit
+        try:
+            orders_to_cancel = []
+            if state.has_order("buy"):
+                orders_to_cancel.append(state.get_order("buy").cl_ord_id)
+            if state.has_order("sell"):
+                orders_to_cancel.append(state.get_order("sell").cl_ord_id)
+            
+            if orders_to_cancel:
+                logger.info(f"Cancelling {len(orders_to_cancel)} orders on exit: {orders_to_cancel}")
+                await http_client.cancel_orders(orders_to_cancel)
+                state.clear_all_orders()
+                logger.info("All orders cancelled successfully")
+        except Exception as e:
+            logger.error(f"Failed to cancel orders on exit: {e}")
+        
         await market_ws.close()
         await user_ws.close()
         await http_client.close()
