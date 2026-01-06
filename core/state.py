@@ -102,12 +102,13 @@ class State:
             self.open_orders = {"buy": None, "sell": None}
             logger.info("All orders cleared")
     
-    def get_orders_to_cancel(self, cancel_distance_bps: float) -> list[OpenOrder]:
+    def get_orders_to_cancel(self, cancel_distance_bps: float, rebalance_distance_bps: float) -> list[OpenOrder]:
         """
-        Get orders that need to be cancelled due to price proximity.
+        Get orders that need to be cancelled due to price distance.
         
         Args:
-            cancel_distance_bps: Distance in bps at which to cancel
+            cancel_distance_bps: Min distance - cancel if closer than this (too close)
+            rebalance_distance_bps: Max distance - cancel if farther than this (too far)
             
         Returns:
             List of orders to cancel
@@ -128,6 +129,12 @@ class State:
                 if distance_bps < cancel_distance_bps:
                     logger.warning(
                         f"Order too close: {side} @ {order.price}, "
+                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps"
+                    )
+                    to_cancel.append(order)
+                elif distance_bps > rebalance_distance_bps:
+                    logger.warning(
+                        f"Order too far: {side} @ {order.price}, "
                         f"last_price={self.last_price}, distance={distance_bps:.2f}bps"
                     )
                     to_cancel.append(order)

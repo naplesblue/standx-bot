@@ -16,6 +16,7 @@ class Config:
     symbol: str
     order_distance_bps: int
     cancel_distance_bps: int
+    rebalance_distance_bps: int
     order_size_btc: float
     max_position_btc: float
     volatility_window_sec: int
@@ -28,6 +29,7 @@ class Config:
             symbol=data["symbol"],
             order_distance_bps=data["order_distance_bps"],
             cancel_distance_bps=data["cancel_distance_bps"],
+            rebalance_distance_bps=data.get("rebalance_distance_bps", 20),
             order_size_btc=data["order_size_btc"],
             max_position_btc=data["max_position_btc"],
             volatility_window_sec=data["volatility_window_sec"],

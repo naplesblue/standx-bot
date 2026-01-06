@@ -5,8 +5,9 @@ wallet:
 symbol: BTC-USD
 
 # 挂单参数
-order_distance_bps: 10 # 挂单距离 last_price 的 bps
-cancel_distance_bps: 5 # 价格靠近到这个距离时撤单
+order_distance_bps: 10 # 挂单默认距离 last_price 的 bps
+cancel_distance_bps: 5 # 价格靠近到这个距离时撤单（太近）
+rebalance_distance_bps: 20 # 价格远离超过这个距离时撤单（太远）
 order_size_btc: 0.01 # 单笔挂单大小
 
 # 仓位控制

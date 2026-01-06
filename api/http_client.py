@@ -196,7 +196,9 @@ class StandXHTTPClient:
         return response.json()
     
     async def _post(self, path: str, payload: dict, sign: bool = False) -> dict:
-        """Make a POST request."""
+        """Make a POST request with latency tracking."""
+        import time
+        
         url = f"{self.BASE_URL}{path}"
         payload_str = json.dumps(payload)
         
@@ -207,10 +209,13 @@ class StandXHTTPClient:
         
         logger.debug(f"POST {path}: {payload_str}")
         
+        start_time = time.time()
         response = await self._client.post(url, content=payload_str, headers=headers)
+        latency_ms = (time.time() - start_time) * 1000
+        
         response.raise_for_status()
         
         result = response.json()
-        logger.debug(f"Response: {result}")
+        logger.info(f"[Latency] {path} responded in {latency_ms:.0f}ms")
         
         return result

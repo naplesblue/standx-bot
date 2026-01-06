@@ -37,7 +37,12 @@ class MarketWSClient:
     async def connect(self):
         """Connect to market data stream."""
         logger.info(f"Connecting to market stream: {self.WS_URL}")
-        self._ws = await websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=10)
+        self._ws = await websockets.connect(
+            self.WS_URL,
+            ping_interval=None,  # Server sends ping, we just respond
+            ping_timeout=60,     # Long timeout to avoid false disconnects
+            close_timeout=10,
+        )
         self._running = True
         logger.info("Market stream connected")
     
@@ -148,7 +153,12 @@ class UserWSClient:
         import uuid
         
         logger.info(f"Connecting to user stream: {self.WS_URL}")
-        self._ws = await websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=10)
+        self._ws = await websockets.connect(
+            self.WS_URL,
+            ping_interval=None,  # Server sends ping, we just respond
+            ping_timeout=60,     # Long timeout to avoid false disconnects
+            close_timeout=10,
+        )
         self._session_id = str(uuid.uuid4())
         self._running = True
         logger.info("User stream connected")

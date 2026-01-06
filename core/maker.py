@@ -116,8 +116,11 @@ class Maker:
             )
             return
         
-        # Step 2: Check and cancel orders that are too close
-        orders_to_cancel = self.state.get_orders_to_cancel(self.config.cancel_distance_bps)
+        # Step 2: Check and cancel orders that are too close or too far
+        orders_to_cancel = self.state.get_orders_to_cancel(
+            self.config.cancel_distance_bps,
+            self.config.rebalance_distance_bps
+        )
         
         if orders_to_cancel:
             cl_ord_ids = [o.cl_ord_id for o in orders_to_cancel]
