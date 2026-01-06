@@ -1,0 +1,20 @@
+wallet:
+  chain: bsc # bsc | solana
+  private_key: "YOUR_PRIVATE_KEY_HERE"
+
+symbol: BTC-USD
+
+# 挂单参数
+order_distance_bps: 10 # 挂单距离 last_price 的 bps
+cancel_distance_bps: 5 # 价格靠近到这个距离时撤单
+order_size_btc: 0.01 # 单笔挂单大小
+
+# 仓位控制
+max_position_btc: 0.1 # 最大持仓（绝对值），超过停止做市
+
+# 波动率控制
+volatility_window_sec: 5 # 观察窗口秒数
+volatility_threshold_bps: 5 # 窗口内波动小于此值才允许挂单
+
+# 运行参数
+loop_interval_sec: 1 # 主循环间隔秒数
