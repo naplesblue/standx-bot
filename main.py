@@ -105,20 +105,22 @@ async def main(config_path: str):
             return_when=asyncio.FIRST_COMPLETED,
         )
         
-        # Cancel pending tasks
+        # Stop all running components first
+        await maker.stop()
+        await market_ws.close()
+        await user_ws.close()
+        
+        # Cancel pending tasks with timeout
         for task in pending:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        
+        if pending:
+            # Wait up to 3 seconds for tasks to finish
+            await asyncio.wait(pending, timeout=3.0)
         
     finally:
-        # Cleanup
-        logger.info("Cleaning up...")
-        await maker.stop()
-        
         # Cancel all open orders on exit
+        logger.info("Cleaning up...")
         try:
             orders_to_cancel = []
             if state.has_order("buy"):
@@ -134,8 +136,6 @@ async def main(config_path: str):
         except Exception as e:
             logger.error(f"Failed to cancel orders on exit: {e}")
         
-        await market_ws.close()
-        await user_ws.close()
         await http_client.close()
         logger.info("Shutdown complete")
 
