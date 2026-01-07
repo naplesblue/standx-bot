@@ -1,5 +1,6 @@
 # Config file with real credentials
 config.yaml
+config-bot*.yaml
 
 # Python
 __pycache__/
