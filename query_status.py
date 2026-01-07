@@ -62,6 +62,18 @@ async def query_uptime(auth: StandXAuth) -> dict:
         return response.json()
 
 
+async def query_balance(auth: StandXAuth) -> dict:
+    """Query account balance and equity."""
+    url = "https://perps.standx.com/api/query_balance"
+    headers = auth.get_auth_headers()
+    headers["Accept"] = "application/json"
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+
 def format_points(value) -> str:
     """Format points value (in millions) for display."""
     if value is None:
@@ -140,8 +152,27 @@ async def main(config_path: str):
     except Exception as e:
         print(f"Warning: Failed to query uptime: {e}")
     
-    # Display Points Summary
+    balance_data = {}
+    try:
+        balance_data = await query_balance(auth)
+    except Exception as e:
+        print(f"Warning: Failed to query balance: {e}")
+    
+    # Display Account Summary
     print("=" * 60)
+    print("Account Summary")
+    print("=" * 60)
+    
+    equity = float(balance_data.get("equity", 0) or 0)
+    balance = float(balance_data.get("balance", 0) or 0)
+    upnl = float(balance_data.get("upnl", 0) or 0)
+    
+    print(f"Equity (Net):    ${equity:,.2f}")
+    print(f"Balance:         ${balance:,.2f}")
+    print(f"Unrealized PnL:  ${upnl:,.2f}")
+    
+    # Display Points Summary
+    print("\n" + "=" * 60)
     print("Points Summary")
     print("=" * 60)
     
