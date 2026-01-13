@@ -22,6 +22,7 @@ class Config:
     volatility_window_sec: int
     volatility_threshold_bps: int
     max_skew_bps: int = 0
+    stop_loss_usd: float = 0.0
     
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -36,6 +37,7 @@ class Config:
             volatility_window_sec=data["volatility_window_sec"],
             volatility_threshold_bps=data["volatility_threshold_bps"],
             max_skew_bps=data.get("max_skew_bps", 0),
+            stop_loss_usd=data.get("stop_loss_usd", 0.0),
         )
 
 

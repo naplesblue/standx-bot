@@ -19,3 +19,6 @@ volatility_threshold_bps: 5 # 窗口内波动小于此值才允许挂单
 
 # 库存倾斜 (Inventory Skewing)
 max_skew_bps: 20 # 最大倾斜点数 (满仓时挂单偏移量)
+
+# 有效止损 (Stop Loss)
+stop_loss_usd: 5.0 # 浮亏超过此数值(美金)立即清仓并停止机器人 (0表示关闭)

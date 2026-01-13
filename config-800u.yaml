@@ -27,3 +27,6 @@ volatility_threshold_bps: 8
 # 库存倾斜 (已启用)
 # 当持仓达到 0.03 BTC 时，挂单价格偏移 30bps，加速平仓
 max_skew_bps: 30
+
+# 有效止损 (Stop Loss)
+stop_loss_usd: 5.0 # 浮亏超过 $5 立即清仓止损

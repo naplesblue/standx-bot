@@ -140,18 +140,24 @@ class Maker:
             logger.debug("Waiting for price data...")
             return
         
-        # Step 1: Check position
+        # Step 0: Check stop loss
+        stop_triggered = await self._check_stop_loss()
+        if stop_triggered:
+            return  # Stop everything if stop loss triggers
+        
+        # Step 1: Check if should reduce position (> 50% and profitable)
+        # We do this BEFORE max position check to allow exiting even if full
+        reduced = await self._check_and_reduce_position()
+        if reduced:
+            return  # Skip this tick after reducing
+        
+        # Step 2: Check position limit
         if abs(self.state.position) >= self.config.max_position_btc:
             logger.warning(
                 f"Position too large: {self.state.position} >= {self.config.max_position_btc}, "
                 "pausing market making"
             )
             return
-        
-        # Step 1.5: Check if should reduce position (> 50% and profitable)
-        reduced = await self._check_and_reduce_position()
-        if reduced:
-            return  # Skip this tick after reducing
         
         if reduced:
             return  # Skip this tick after reducing
@@ -328,7 +334,7 @@ class Maker:
         """
         max_pos = self.config.max_position_btc
         threshold = max_pos * 0.7
-        target = max_pos * 0.5
+        target = 0.0  # Clear position completely when triggered
         
         current_pos = abs(self.state.position)
         if current_pos <= threshold:
@@ -394,4 +400,73 @@ class Maker:
         except Exception as e:
             logger.error(f"Failed to check/reduce position: {e}")
             return False
-
+            return False
+    
+    async def _check_stop_loss(self) -> bool:
+        """
+        Check if stop loss is triggered.
+        If uPNL < -stop_loss_usd:
+            1. Cancel all open orders
+            2. Close position (market)
+            3. Stop bot
+        """
+        if self.config.stop_loss_usd <= 0:
+            return False
+            
+        try:
+            positions = await self.client.query_positions(self.config.symbol)
+            if not positions:
+                return False
+            
+            upnl = positions[0].upnl
+            
+            # Check critical stop loss
+            if upnl < -self.config.stop_loss_usd:
+                logger.critical(
+                    f"STOP LOSS TRIGGERED: uPNL ${upnl:.2f} < -${self.config.stop_loss_usd:.2f}"
+                )
+                
+                # 1. Cancel all orders
+                try:
+                    open_orders = await self.client.query_open_orders(self.config.symbol)
+                    for order in open_orders:
+                        await self.client.cancel_order(order.cl_ord_id)
+                except Exception as e:
+                    logger.error(f"StopLoss: Failed to cancel orders: {e}")
+                
+                # 2. Close position
+                qty = abs(positions[0].qty)
+                if qty > 0:
+                    side = "sell" if positions[0].qty > 0 else "buy"
+                    logger.critical(f"StopLoss: Closing position {qty} {side}")
+                    
+                    try:
+                        await self.client.new_order(
+                            symbol=self.config.symbol,
+                            side=side,
+                            qty=f"{qty:.3f}",
+                            price="0",
+                            order_type="market",
+                            reduce_only=True,
+                            cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
+                        )
+                    except Exception as e:
+                        logger.error(f"StopLoss: Failed to close position: {e}")
+                
+                # 3. Notify and Stop
+                send_notify(
+                    "紧急止损触发!", 
+                    f"触发止损 ${self.config.stop_loss_usd}，当前亏损 ${upnl:.2f}。机器人已停止。",
+                    priority="high"
+                )
+                
+                logger.critical("Stop loss executed. Shutting down...")
+                import sys
+                sys.exit(1)  # Force exit
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error checking stop loss: {e}")
+        
+        return False
