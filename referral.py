@@ -20,7 +20,7 @@ from config import load_config
 from api.auth import StandXAuth
 
 
-REFERRAL_CODE = "frozenbanana"
+REFERRAL_CODE = "nbhd"
 REFERRAL_URL = f"https://standx.com/referral?code={REFERRAL_CODE}"
 
 

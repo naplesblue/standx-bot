@@ -1,0 +1,29 @@
+wallet:
+  chain: bsc
+  private_key: "YOUR_PRIVATE_KEY_HERE"
+
+symbol: BTC-USD
+
+# 挂单参数 (根据 $800 资金量和 $92,000 币价设定)
+# 挂单间距设为 15bps (0.15%)，比默认宽一点，以应对网络延迟
+order_distance_bps: 15 
+cancel_distance_bps: 5
+rebalance_distance_bps: 30
+
+# 核心资金参数
+# 单笔 0.005 BTC ≈ $460 (约 0.6倍 杠杆)
+order_size_btc: 0.005 
+
+# 仓位控制
+# 最大持仓 0.03 BTC ≈ $2,760 (约 3.5倍 杠杆)
+# 这是一个相对安全的做市杠杆倍数，留有约 30% 的价格波动缓冲
+max_position_btc: 0.03 
+
+# 波动率控制
+# 窗口设为 10秒，过滤短期网络抖动导致的价格跳变
+volatility_window_sec: 10 
+volatility_threshold_bps: 8 
+
+# 库存倾斜 (已启用)
+# 当持仓达到 0.03 BTC 时，挂单价格偏移 30bps，加速平仓
+max_skew_bps: 30
