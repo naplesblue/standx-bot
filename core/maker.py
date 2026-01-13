@@ -153,11 +153,36 @@ class Maker:
         if reduced:
             return  # Skip this tick after reducing
         
-        # Step 2: Check and cancel orders that are too close or too far
-        orders_to_cancel = self.state.get_orders_to_cancel(
-            self.config.cancel_distance_bps,
-            self.config.rebalance_distance_bps
-        )
+        if reduced:
+            return  # Skip this tick after reducing
+        
+        # Step 2: Calculate skew and targets
+        skew_bps = self._get_skew_bps()
+        
+        # Buy target: increase distance if skew > 0 (long), decrease if skew < 0 (short)
+        buy_target = max(0, self.config.order_distance_bps + skew_bps)
+        
+        # Sell target: decrease distance if skew > 0 (long), increase if skew < 0 (short)
+        sell_target = max(0, self.config.order_distance_bps - skew_bps)
+        
+        # Calculate tolerant bounds
+        # Lower bound: target - (order - cancel) => target - tolerance
+        tolerance_lower = max(1, self.config.order_distance_bps - self.config.cancel_distance_bps)
+        # Upper bound: target + (rebalance - order) => target + tolerance
+        tolerance_upper = max(1, self.config.rebalance_distance_bps - self.config.order_distance_bps)
+        
+        buy_bounds = (max(0, buy_target - tolerance_lower), buy_target + tolerance_upper)
+        sell_bounds = (max(0, sell_target - tolerance_lower), sell_target + tolerance_upper)
+        
+        if abs(skew_bps) > 1:
+            logger.debug(
+                f"Skew: {skew_bps:.1f}bps | "
+                f"Buy T:{buy_target:.1f} [{buy_bounds[0]:.1f}, {buy_bounds[1]:.1f}] | "
+                f"Sell T:{sell_target:.1f} [{sell_bounds[0]:.1f}, {sell_bounds[1]:.1f}]"
+            )
+        
+        # Step 3: Check and cancel orders
+        orders_to_cancel = self.state.get_orders_to_cancel(buy_bounds, sell_bounds)
         
         if orders_to_cancel:
             for order in orders_to_cancel:
@@ -176,7 +201,7 @@ class Maker:
             # Don't place new orders this tick
             return
         
-        # Step 3: Check volatility
+        # Step 4: Check volatility
         volatility = self.state.get_volatility_bps()
         if volatility > self.config.volatility_threshold_bps:
             logger.debug(
@@ -184,18 +209,29 @@ class Maker:
             )
             return
         
-        # Step 4: Place missing orders
-        await self._place_missing_orders()
+        # Step 5: Place missing orders
+        await self._place_missing_orders(buy_target, sell_target)
     
-    async def _place_missing_orders(self):
+    def _get_skew_bps(self) -> float:
+        """Calculate inventory skew in bps."""
+        if self.config.max_skew_bps <= 0 or self.config.max_position_btc <= 0:
+            return 0.0
+        
+        ratio = self.state.position / self.config.max_position_btc
+        # Clamp ratio to [-1, 1] just in case
+        ratio = max(-1.0, min(1.0, ratio))
+        
+        return ratio * self.config.max_skew_bps
+    
+    async def _place_missing_orders(self, buy_target_bps: float, sell_target_bps: float):
         """Place buy and sell orders if missing."""
         last_price = self.state.last_price
         if last_price is None:
             return
         
         # Calculate order prices
-        buy_price = last_price * (1 - self.config.order_distance_bps / 10000)
-        sell_price = last_price * (1 + self.config.order_distance_bps / 10000)
+        buy_price = last_price * (1 - buy_target_bps / 10000)
+        sell_price = last_price * (1 + sell_target_bps / 10000)
         
         # Place buy order if missing
         if not self.state.has_order("buy"):

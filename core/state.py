@@ -102,13 +102,13 @@ class State:
             self.open_orders = {"buy": None, "sell": None}
             logger.info("All orders cleared")
     
-    def get_orders_to_cancel(self, cancel_distance_bps: float, rebalance_distance_bps: float) -> list[OpenOrder]:
+    def get_orders_to_cancel(self, buy_bounds: tuple, sell_bounds: tuple) -> list[OpenOrder]:
         """
         Get orders that need to be cancelled due to price distance.
         
         Args:
-            cancel_distance_bps: Min distance - cancel if closer than this (too close)
-            rebalance_distance_bps: Max distance - cancel if farther than this (too far)
+            buy_bounds: (min_dist, max_dist) for buy orders
+            sell_bounds: (min_dist, max_dist) for sell orders
             
         Returns:
             List of orders to cancel
@@ -123,19 +123,25 @@ class State:
                 if order is None:
                     continue
                 
+                # Determine bounds for this side
+                if side == "buy":
+                    min_dist, max_dist = buy_bounds
+                else:
+                    min_dist, max_dist = sell_bounds
+                
                 # Calculate distance in bps
                 distance_bps = abs(order.price - self.last_price) / self.last_price * 10000
                 
-                if distance_bps < cancel_distance_bps:
+                if distance_bps < min_dist:
                     logger.warning(
                         f"Order too close: {side} @ {order.price}, "
-                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps"
+                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps < {min_dist:.2f}bps"
                     )
                     to_cancel.append(order)
-                elif distance_bps > rebalance_distance_bps:
+                elif distance_bps > max_dist:
                     logger.warning(
                         f"Order too far: {side} @ {order.price}, "
-                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps"
+                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps > {max_dist:.2f}bps"
                     )
                     to_cancel.append(order)
             

@@ -16,3 +16,6 @@ max_position_btc: 0.1 # 最大持仓（绝对值），超过停止做市
 # 波动率控制
 volatility_window_sec: 5 # 观察窗口秒数
 volatility_threshold_bps: 5 # 窗口内波动小于此值才允许挂单
+
+# 库存倾斜 (Inventory Skewing)
+max_skew_bps: 20 # 最大倾斜点数 (满仓时挂单偏移量)
