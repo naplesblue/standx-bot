@@ -124,6 +124,9 @@ async def main(config_path: str):
                         logger.info(f"Order {status}: clearing {side} from state")
                         state.set_order(side, None)
                         
+                        if status == "filled":
+                            state.record_fill()
+                        
                         # Trigger a check to potentially place new order
                         maker._pending_check.set()
         
@@ -135,9 +138,12 @@ async def main(config_path: str):
             qty = float(pos_data.get("qty", 0))
             symbol = pos_data.get("symbol", "")
             
+            pending_price = pos_data.get("entry_price", None)
+            entry_price = float(pending_price) if pending_price is not None else 0.0
+            
             if symbol == config.symbol:
-                logger.info(f"Position update: {symbol} qty={qty}")
-                state.update_position(qty)
+                logger.info(f"Position update: {symbol} qty={qty} @ {entry_price}")
+                state.update_position(qty, entry_price)
         
         user_ws.on_position(on_position)
         

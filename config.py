@@ -23,6 +23,10 @@ class Config:
     volatility_threshold_bps: int
     max_skew_bps: int = 0
     stop_loss_usd: float = 0.0
+    taker_fee_rate: float = 0.0004
+    min_profit_bps: int = 2
+    fill_cooldown_sec: int = 10
+    volatility_pause_sec: int = 30
     
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -38,6 +42,10 @@ class Config:
             volatility_threshold_bps=data["volatility_threshold_bps"],
             max_skew_bps=data.get("max_skew_bps", 0),
             stop_loss_usd=data.get("stop_loss_usd", 0.0),
+            taker_fee_rate=data.get("taker_fee_rate", 0.0004),
+            min_profit_bps=data.get("min_profit_bps", 2),
+            fill_cooldown_sec=data.get("fill_cooldown_sec", 10),
+            volatility_pause_sec=data.get("volatility_pause_sec", 30),
         )
 
 

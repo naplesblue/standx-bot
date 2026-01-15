@@ -35,6 +35,10 @@ class State:
     
     # Position
     position: float = 0.0
+    entry_price: float = 0.0
+    
+    # Execution tracking
+    last_fill_time: float = 0.0
     
     # Open orders (one buy, one sell max)
     open_orders: Dict[str, Optional[OpenOrder]] = field(default_factory=lambda: {"buy": None, "sell": None})
@@ -71,11 +75,18 @@ class State:
             volatility = (max(prices) - min(prices)) / prices[-1] * 10000
             return volatility
     
-    def update_position(self, qty: float):
-        """Update position quantity."""
+    def update_position(self, qty: float, entry_price: float = 0.0):
+        """Update position quantity and entry price."""
         with self._lock:
             self.position = qty
-            logger.info(f"Position updated: {qty}")
+            self.entry_price = entry_price
+            logger.info(f"Position updated: {qty} @ {entry_price}")
+    
+    def record_fill(self):
+        """Record the time of a fill."""
+        with self._lock:
+            self.last_fill_time = time.time()
+            logger.info(f"Recorded fill at {self.last_fill_time}")
     
     def set_order(self, side: str, order: Optional[OpenOrder]):
         """Set or clear an open order."""

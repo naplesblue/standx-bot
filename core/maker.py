@@ -139,6 +139,24 @@ class Maker:
         if self.state.last_price is None:
             logger.debug("Waiting for price data...")
             return
+
+        # Step -1: Check volatility guard
+        volatility = self.state.get_volatility_bps()
+        if volatility > self.config.volatility_threshold_bps:
+            logger.warning(
+                f"Volatility guard active: {volatility:.2f}bps > {self.config.volatility_threshold_bps}bps. "
+                f"Pausing for {self.config.volatility_pause_sec}s"
+            )
+            # Sleep to enforce pause
+            await asyncio.sleep(self.config.volatility_pause_sec)
+            return
+
+        # Step -2: Check cool-down
+        import time
+        time_since_fill = time.time() - self.state.last_fill_time
+        if time_since_fill < self.config.fill_cooldown_sec:
+           logger.debug(f"Cool-down active: {time_since_fill:.1f}s < {self.config.fill_cooldown_sec}s")
+           return
         
         # Step 0: Check stop loss
         stop_triggered = await self._check_stop_loss()
@@ -207,13 +225,9 @@ class Maker:
             # Don't place new orders this tick
             return
         
-        # Step 4: Check volatility
-        volatility = self.state.get_volatility_bps()
-        if volatility > self.config.volatility_threshold_bps:
-            logger.debug(
-                f"Volatility too high: {volatility:.2f}bps > {self.config.volatility_threshold_bps}bps"
-            )
-            return
+        # Step 4: Check volatility (redundant with guard but kept for logging/metrics if needed)
+        # We already handled critical volatility at the start of _tick
+        pass
         
         # Step 5: Place missing orders
         await self._place_missing_orders(buy_target, sell_target)
@@ -235,17 +249,50 @@ class Maker:
         if last_price is None:
             return
         
-        # Calculate order prices
-        buy_price = last_price * (1 - buy_target_bps / 10000)
-        sell_price = last_price * (1 + sell_target_bps / 10000)
+        # Define targets
+        buy_target_price = last_price * (1 - buy_target_bps / 10000)
+        sell_target_price = last_price * (1 + sell_target_bps / 10000)
         
+        # Override with Maker Exit Logic if we have a position
+        # If we have a position, we want to close it with a Limit Order at Entry + Fee + Profit
+        position_qty = self.state.position
+        entry_price = self.state.entry_price
+        
+        if entry_price > 0 and position_qty != 0:
+            # Calculate break-even exit price including taker fee (for safety comparison) and maker rebate benefit
+            # Taker Fee Rate: self.config.taker_fee_rate (e.g. 0.0004)
+            # Min Profit: self.config.min_profit_bps (e.g. 2 bps)
+            
+            required_margin = self.config.taker_fee_rate + (self.config.min_profit_bps / 10000)
+            
+            if position_qty > 0: # Long Position -> Sell Order is the Exit
+                # We want to sell higher than entry
+                exit_price = entry_price * (1 + required_margin)
+                # Ensure we don't sell below current market if it's already higher (taking profit)
+                # But actually, standard skew logic might already handle "taking profit" if skew is high.
+                # Here we enforce a "minimum" exit price to ensure profitability.
+                
+                # If the standard skew-based target is LOWER than our required exit, force it UP to exit price.
+                if sell_target_price < exit_price:
+                    logger.info(f"Maker Exit: Adjusting Sell Target {sell_target_price:.2f} -> {exit_price:.2f} (Entry: {entry_price})")
+                    sell_target_price = max(sell_target_price, exit_price)
+                    
+            elif position_qty < 0: # Short Position -> Buy Order is the Exit
+                # We want to buy lower than entry
+                exit_price = entry_price * (1 - required_margin)
+                
+                # If standard skew-based target is HIGHER than our required exit, force it DOWN.
+                if buy_target_price > exit_price:
+                    logger.info(f"Maker Exit: Adjusting Buy Target {buy_target_price:.2f} -> {exit_price:.2f} (Entry: {entry_price})")
+                    buy_target_price = min(buy_target_price, exit_price)
+
         # Place buy order if missing
         if not self.state.has_order("buy"):
-            await self._place_order("buy", buy_price)
+            await self._place_order("buy", buy_target_price)
         
         # Place sell order if missing
         if not self.state.has_order("sell"):
-            await self._place_order("sell", sell_price)
+            await self._place_order("sell", sell_target_price)
     
     async def _place_order(self, side: str, price: float):
         """Place a single order."""
@@ -332,46 +379,53 @@ class Maker:
         Returns:
             True if reduction was executed, False otherwise
         """
-        max_pos = self.config.max_position_btc
-        threshold = max_pos * 0.7
-        target = 0.0  # Clear position completely when triggered
+        # Modified Logic: Aggressive Profit Taking
+        # If we have ANY position and are in profit (covering taker fees), CLOSE IT.
+        # This overrides the "threshold" logic.
+        
+        # If config doesn't have min_profit_usd, default to 0 (or safe small value)
+        min_profit_usd = getattr(self.config, 'min_profit_usd', 0.0)
         
         current_pos = abs(self.state.position)
-        if current_pos <= threshold:
+        if current_pos == 0:
             return False
-        
-        # Query current uPNL for this position
+            
+        # Check uPNL
         try:
             positions = await self.client.query_positions(self.config.symbol)
             if not positions:
                 return False
             
             upnl = positions[0].upnl
-            if upnl <= 0:
-                logger.debug(f"Position {current_pos:.4f} > threshold but uPNL={upnl:.2f} <= 0, skip reduce")
+            
+            # CONDITION: Profit > Min Threshold
+            # We treat this as a "Panic Exit" or "Opportunity Exit" to clear inventory.
+            should_reduce = False
+            
+            if upnl > min_profit_usd:
+                 # Only reduce if we are holding position
+                 should_reduce = True
+                 logger.info(f"Aggressive Profit Take: uPNL ${upnl:.2f} > ${min_profit_usd:.2f}")
+
+            if not should_reduce:
                 return False
             
-            # Calculate reduce quantity
-            reduce_qty = current_pos - target
-            if reduce_qty <= 0:
-                return False
+            # Calculate reduce quantity (Full Close)
+            reduce_qty = current_pos
             
-            # Determine side: if position is long, sell to reduce; if short, buy to reduce
+            # Determine side
             if self.state.position > 0:
                 reduce_side = "sell"
             else:
                 reduce_side = "buy"
             
             logger.info(
-                f"Reducing position: {self.state.position:+.4f} -> {'+' if self.state.position > 0 else ''}{self.state.position - reduce_qty if self.state.position > 0 else self.state.position + reduce_qty:.4f}, "
+                f"Closing position (Market): {self.state.position:+.4f}, "
                 f"qty={reduce_qty:.4f}, side={reduce_side}, uPNL=${upnl:.2f}"
             )
             
             # Place market order to reduce
-            import math
             cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
-            
-            # Format quantity
             qty_str = f"{reduce_qty:.3f}"
             
             response = await self.client.new_order(
@@ -385,16 +439,16 @@ class Maker:
             )
             
             if response.get("code") == 0 or "id" in response:
-                logger.info(f"Reduce order placed: {cl_ord_id}")
-                self._write_reduce_log("REDUCE", -reduce_qty if reduce_side == "sell" else reduce_qty, f"profit_take_upnl_{upnl:.2f}")
+                logger.info(f"Close order placed: {cl_ord_id}")
+                self._write_reduce_log("CLOSE", -reduce_qty if reduce_side == "sell" else reduce_qty, f"aggressive_exit_upnl_{upnl:.2f}")
                 send_notify(
-                    "仓位减仓",
-                    f"{self.config.symbol} 减仓 {reduce_qty:.4f}，uPNL=${upnl:.2f}",
+                    "仓位止盈 (Market)",
+                    f"{self.config.symbol} 市价止盈 {reduce_qty:.4f}，uPNL=${upnl:.2f}",
                     priority="normal"
                 )
                 return True
             else:
-                logger.error(f"Reduce order failed: {response}")
+                logger.error(f"Close order failed: {response}")
                 return False
                 
         except Exception as e:
