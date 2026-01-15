@@ -66,7 +66,7 @@ class State:
         """
         with self._lock:
             if len(self.price_window) < 2:
-                return float("inf")
+                return 0.0
             
             prices = [p for _, p in self.price_window]
             if prices[-1] == 0:

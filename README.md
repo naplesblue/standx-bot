@@ -4,7 +4,7 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 
 本版本加入了高级风控特性，包括波动率熔断、智能平仓与冷却机制。
 
-**作者**: [@frozenraspberry](https://x.com/frozenraspberry)
+**原作者**: [@frozenraspberry](https://x.com/frozenraspberry)
 
 ## 策略原理
 
