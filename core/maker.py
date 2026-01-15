@@ -515,9 +515,8 @@ class Maker:
                 )
                 
                 logger.critical("Stop loss executed. Shutting down...")
-                import sys
-                sys.exit(1)  # Force exit
-                
+                logger.critical("Stop loss executed. Shutting down...")
+                self._running = False  # Graceful exit
                 return True
                 
         except Exception as e:
