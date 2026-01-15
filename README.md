@@ -2,7 +2,7 @@
 
 StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧挂限价单获取积分，价格靠近时自动撤单避免成交。
 
-本版本加入了高级风控特性，包括波动率熔断、智能平仓与冷却机制。
+本版本加入了高级风控特性，包括波动率熔断、智能平仓、冷却机制以及 **止损恢复模式**。
 
 **原作者**: [@frozenraspberry](https://x.com/frozenraspberry)
 
@@ -23,11 +23,17 @@ StandX 的 Maker Points 活动奖励挂单行为：订单在盘口停留超过 3
 ### 2. 冷却机制 (Cool-down)
 每当发生一笔成交（Fill）后，机器人会强制进入冷却期 `fill_cooldown_sec`（默认 10秒）。这给予市场喘息时间，防止在单边趋势中连续接飞刀，导致瞬间满仓。
 
-### 3. (Maker Exit) 智能做市平仓
+### 3. 自愈式止损恢复 (Stop Loss Recovery)
+当触发 `stop_loss_usd` 后，机器人**不会退出程序**，而是进入"恢复模式"：
+1.  **平仓并暂停**：市价平仓，暂停 `stop_loss_cooldown_sec` (默认10分钟)。
+2.  **环境监测**：暂停结束后，检查过去 `recovery_window_sec` (5分钟) 的波动率。
+3.  **自动恢复**：如果波动率低于 `recovery_volatility_bps` (0.25%)，自动恢复挂单；否则继续等待。
+
+### 4. (Maker Exit) 智能做市平仓
 当持有仓位时，机器人不再盲目等待原来的 Skew 调整。如果不触及紧急止损或激进止盈线，它会尝试在 `成本价 + Taker手续费 + 微利` 的位置挂出平仓单。
 *   **优势**：把被套的 "事故" 转化为赚取 Maker 积分的 "机会"。
 
-### 4. (Aggressive Profit Take) 激进止盈
+### 5. (Aggressive Profit Take) 激进止盈
 如果持仓盈利（uPNL）超过了 `min_profit_usd`（足以覆盖 Taker 费），机器人会不再等待，**立即市价平仓**。这是为了快速释放仓位，回归无风险的挂单挖矿状态。
 
 ## 安装
@@ -70,6 +76,12 @@ min_profit_bps: 2            # Maker Exit 追求的最小利润点 (bps)
 min_profit_usd: 0.1          # 激进止盈触发的最小美元利润（需覆盖手续费）
 fill_cooldown_sec: 10        # 成交后的冷却观察期（秒）
 volatility_pause_sec: 30     # 波动率熔断后的暂停时间（秒）
+
+# 止损恢复模式
+stop_loss_cooldown_sec: 600      # 止损后暂停秒数 (10分钟)
+recovery_window_sec: 300         # 恢复检查的波动率窗口 (5分钟)
+recovery_volatility_bps: 25      # 允许恢复的最大波动率 (0.25%)
+recovery_check_interval_sec: 300 # 再次检查的间隔 (5分钟)
 
 # 波动率控制
 volatility_window_sec: 5     # 观察窗口秒数

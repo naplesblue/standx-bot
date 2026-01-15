@@ -46,8 +46,12 @@ class State:
     # Lock for thread safety
     _lock: Lock = field(default_factory=Lock)
     
-    def update_price(self, price: float, window_sec: int = 5):
-        """Update price and maintain sliding window."""
+    def update_price(self, price: float, window_sec: int = 3600):
+        """Update price and maintain sliding window.
+        
+        Note: We keep a longer history (default 1h) to support both 
+        short-term guard (5s) and long-term recovery checks (5m+).
+        """
         with self._lock:
             now = time.time()
             self.last_price = price
@@ -57,18 +61,30 @@ class State:
             cutoff = now - window_sec
             self.price_window = [(t, p) for t, p in self.price_window if t > cutoff]
     
-    def get_volatility_bps(self) -> float:
+    def get_volatility_bps(self, window_sec: Optional[int] = None) -> float:
         """
         Calculate volatility in bps over the price window.
         
+        Args:
+            window_sec: Optional window size in seconds. If None, uses all available data.
+            
         Returns:
-            Volatility in basis points, or inf if insufficient data
+            Volatility in basis points, or 0 if insufficient data
         """
         with self._lock:
-            if len(self.price_window) < 2:
+            if not self.price_window:
+                return 0.0
+                
+            now = time.time()
+            if window_sec:
+                cutoff = now - window_sec
+                prices = [p for t, p in self.price_window if t > cutoff]
+            else:
+                prices = [p for _, p in self.price_window]
+            
+            if len(prices) < 2:
                 return 0.0
             
-            prices = [p for _, p in self.price_window]
             if prices[-1] == 0:
                 return float("inf")
             

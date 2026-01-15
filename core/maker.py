@@ -58,6 +58,10 @@ class Maker:
         self._running = False
         self._pending_check = asyncio.Event()
         self._reduce_log_file = None  # Will be set by main.py
+        
+        # Recovery mode state
+        self._stop_loss_active = False
+        self._next_recovery_check = 0.0
     
     async def initialize(self):
         """Initialize state from exchange."""
@@ -140,8 +144,43 @@ class Maker:
             logger.debug("Waiting for price data...")
             return
 
+        # Step -2: Check Recovery Mode
+        if self._stop_loss_active:
+            import time
+            now = time.time()
+            
+            if now < self._next_recovery_check:
+                # Still in cooldown/wait period
+                logger.debug(f"Recovery mode active. Waiting... ({self._next_recovery_check - now:.0f}s left)")
+                await asyncio.sleep(5) # Sleep to avoid busy loop logs
+                return
+            
+            # Check stability
+            # We use the configured recovery window (e.g. 5 mins)
+            volatility = self.state.get_volatility_bps(window_sec=self.config.recovery_window_sec)
+            
+            if volatility > self.config.recovery_volatility_bps:
+                logger.warning(
+                    f"Recovery Check: Market still volatile ({volatility:.2f}bps > {self.config.recovery_volatility_bps}bps). "
+                    f"Waiting another {self.config.recovery_check_interval_sec}s..."
+                )
+                self._next_recovery_check = now + self.config.recovery_check_interval_sec
+                return
+            else:
+                logger.info(
+                    f"Recovery Check: Market stabilized ({volatility:.2f}bps <= {self.config.recovery_volatility_bps}bps). "
+                    "Resuming trading..."
+                )
+                self._stop_loss_active = False
+                send_notify(
+                    "行情恢复平稳",
+                    f"波动率 {volatility:.2f}bps，开始恢复挂单。",
+                    priority="normal"
+                )
+        
         # Step -1: Check volatility guard
-        volatility = self.state.get_volatility_bps()
+        # Use short-term window for immediate guard
+        volatility = self.state.get_volatility_bps(window_sec=self.config.volatility_window_sec)
         if volatility > self.config.volatility_threshold_bps:
             logger.warning(
                 f"Volatility guard active: {volatility:.2f}bps > {self.config.volatility_threshold_bps}bps. "
@@ -507,16 +546,18 @@ class Maker:
                     except Exception as e:
                         logger.error(f"StopLoss: Failed to close position: {e}")
                 
-                # 3. Notify and Stop
+                # 3. Notify and Enter Recovery Mode
                 send_notify(
                     "紧急止损触发!", 
-                    f"触发止损 ${self.config.stop_loss_usd}，当前亏损 ${upnl:.2f}。机器人已停止。",
+                    f"触发止损 ${self.config.stop_loss_usd}，当前亏损 ${upnl:.2f}。进入恢复模式，暂停 {self.config.stop_loss_cooldown_sec}秒。",
                     priority="high"
                 )
                 
-                logger.critical("Stop loss executed. Shutting down...")
-                logger.critical("Stop loss executed. Shutting down...")
-                self._running = False  # Graceful exit
+                logger.critical(f"Stop loss executed. Entering recovery mode (wait {self.config.stop_loss_cooldown_sec}s)...")
+                import time
+                self._stop_loss_active = True
+                self._next_recovery_check = time.time() + self.config.stop_loss_cooldown_sec
+                
                 return True
                 
         except Exception as e:
