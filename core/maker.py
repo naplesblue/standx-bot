@@ -184,8 +184,23 @@ class Maker:
         if volatility > self.config.volatility_threshold_bps:
             logger.warning(
                 f"Volatility guard active: {volatility:.2f}bps > {self.config.volatility_threshold_bps}bps. "
-                f"Pausing for {self.config.volatility_pause_sec}s"
+                "Cancelling orders and pausing..."
             )
+            
+            # Cancel all orders first
+            try:
+                orders_to_cancel = []
+                if self.state.has_order("buy"):
+                    orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
+                if self.state.has_order("sell"):
+                    orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
+                
+                if orders_to_cancel:
+                    await self.client.cancel_orders(orders_to_cancel)
+                    self.state.clear_all_orders()
+            except Exception as e:
+                logger.error(f"VolatilityGuard: Failed to cancel orders: {e}")
+
             # Sleep to enforce pause
             await asyncio.sleep(self.config.volatility_pause_sec)
             return
