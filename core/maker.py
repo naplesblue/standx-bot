@@ -115,12 +115,14 @@ class Maker:
         # Signal check
         self._pending_check.set()
 
+    
     def on_cex_price_update(self, price: float):
         """
         Called when Binance price updates.
         Updates Volatility window and signals check.
         """
-        self.state.update_cex_price(price, self.config.volatility_window_sec)
+        # Keep 1h history to support Recovery Mode (5m window)
+        self.state.update_cex_price(price, window_sec=3600)
         
         # Signal check (high volatility should trigger immediate reaction)
         self._pending_check.set()
@@ -286,32 +288,9 @@ class Maker:
                         
                         return # Stay allowed to pause
         
-        # Step -1: Check volatility guard
-        # Use short-term window for immediate guard
-        volatility = self.state.get_volatility_bps(window_sec=self.config.volatility_window_sec)
-        if volatility > self.config.volatility_threshold_bps:
-            logger.warning(
-                f"Volatility guard active: {volatility:.2f}bps > {self.config.volatility_threshold_bps}bps. "
-                "Cancelling orders and pausing..."
-            )
-            
-            # Cancel all orders first
-            try:
-                orders_to_cancel = []
-                if self.state.has_order("buy"):
-                    orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
-                if self.state.has_order("sell"):
-                    orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
-                
-                if orders_to_cancel:
-                    await self.client.cancel_orders(orders_to_cancel)
-                    self.state.clear_all_orders()
-            except Exception as e:
-                logger.error(f"VolatilityGuard: Failed to cancel orders: {e}")
-
-            # Sleep to enforce pause
-            await asyncio.sleep(self.config.volatility_pause_sec)
-            return
+        # Step -1: Check volatility guard (Legacy removed)
+        # Replaced by Spread Guard and Staleness Guard
+        pass
 
         # Step -2: Check cool-down
         import time

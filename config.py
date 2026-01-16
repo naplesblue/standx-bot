@@ -26,7 +26,6 @@ class Config:
     taker_fee_rate: float = 0.0004
     min_profit_bps: int = 2
     fill_cooldown_sec: int = 10
-    volatility_pause_sec: int = 30
     recovery_window_sec: int = 300
     recovery_volatility_bps: int = 25
     stop_loss_cooldown_sec: int = 600
@@ -54,7 +53,6 @@ class Config:
             taker_fee_rate=data.get("taker_fee_rate", 0.0004),
             min_profit_bps=data.get("min_profit_bps", 2),
             fill_cooldown_sec=data.get("fill_cooldown_sec", 10),
-            volatility_pause_sec=data.get("volatility_pause_sec", 30),
             recovery_window_sec=data.get("recovery_window_sec", 300),
             recovery_volatility_bps=data.get("recovery_volatility_bps", 25),
             stop_loss_cooldown_sec=data.get("stop_loss_cooldown_sec", 600),

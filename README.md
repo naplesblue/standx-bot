@@ -14,17 +14,14 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 *   **优势**：CEX 价格通常领先 DEX 几秒，在 StandX 价格剧烈波动前提前撤单防御。
 
 ### 2. 双重熔断机制
-*   **波动率熔断 (Volatility Guard)**: 
-    *   监测 CEX 价格短期内（如5秒）的振幅。达到阈值即暂停。
-*   **价差熔断 (Spread Guard) [新增]**: 
+*   **价差熔断 (Spread Guard)**: 
     *   实时计算 `abs(Binance - StandX)` 偏离度。
     *   如果偏离超过 `spread_threshold_bps` (默认20bps)，立即撤单并暂停。
     *   **恢复机制**: 只有当偏离度回落至 `spread_recovery_bps` (默认10bps) 以下，并持续稳定 `spread_recovery_sec` (默认10秒) 后，才恢复挂单。
+*   **断线熔断 (Staleness Guard)**: 
+    *   如果 Binance 数据发生中断或延迟超过 5秒，机器人会自动识别 "致盲" 风险，强制撤销所有挂单并暂停运行，直到数据恢复。
 
-### 3. 数据流安全 (Staleness Guard)
-*   如果 Binance 数据发生中断或延迟超过 5秒，机器人会自动识别 "致盲" 风险，强制撤销所有挂单并暂停运行，直到数据恢复。
-
-### 4. 其他特性 (已包含)
+### 3. 其他特性 (已包含)
 *   **冷却机制**: 成交后暂停接单。
 *   **自愈式止损**: 触发止损后暂停观察，行情平稳后自动恢复。
 *   **智能平仓**: 优先 Maker 限价平仓赚积分。
@@ -57,24 +54,21 @@ order_size_btc: 0.01
 max_position_btc: 0.1
 stop_loss_usd: 50.0
 
-# 高级风控 - 价差熔断 [新增]
+# 高级风控 - 价差熔断
 spread_threshold_bps: 20     # 偏离超过 20bps 触发熔断
 spread_recovery_bps: 10      # 偏离小于 10bps 允许尝试恢复
 spread_recovery_sec: 10      # 需持续满足恢复条件 10秒
 
 # 高级风控 - 其他
-binance_staleness_sec: 5.0
+binance_staleness_sec: 5.0   # Binance 数据最大允许延迟
 taker_fee_rate: 0.0004
 min_profit_bps: 2
 fill_cooldown_sec: 10
-volatility_pause_sec: 30
-volatility_window_sec: 5
-volatility_threshold_bps: 5
 
 # 恢复模式 (止损后)
 stop_loss_cooldown_sec: 600
-recovery_window_sec: 300
-recovery_volatility_bps: 25
+recovery_window_sec: 300     # 恢复前观察窗口
+recovery_volatility_bps: 25  # 恢复阈值(波动率)
 recovery_check_interval_sec: 300
 ```
 
