@@ -30,7 +30,8 @@ class State:
     """Bot state container."""
     
     # Price data
-    last_price: Optional[float] = None
+    last_dex_price: Optional[float] = None
+    last_cex_update_time: float = 0.0
     price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
     
     # Position
@@ -46,15 +47,25 @@ class State:
     # Lock for thread safety
     _lock: Lock = field(default_factory=Lock)
     
-    def update_price(self, price: float, window_sec: int = 3600):
-        """Update price and maintain sliding window.
+    @property
+    def last_price(self):
+        """Alias for last_dex_price for backward compatibility."""
+        return self.last_dex_price
+
+    def update_dex_price(self, price: float):
+        """Update DEX price (Anchor for orders)."""
+        with self._lock:
+            self.last_dex_price = price
+
+    def update_cex_price(self, price: float, window_sec: int = 3600):
+        """Update CEX price (Source for Volatility) and maintain sliding window.
         
         Note: We keep a longer history (default 1h) to support both 
         short-term guard (5s) and long-term recovery checks (5m+).
         """
         with self._lock:
             now = time.time()
-            self.last_price = price
+            self.last_cex_update_time = now
             self.price_window.append((now, price))
             
             # Clean up old data

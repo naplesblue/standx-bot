@@ -14,6 +14,7 @@ from config import load_config
 from api.auth import StandXAuth
 from api.http_client import StandXHTTPClient
 from api.ws_client import MarketWSClient, UserWSClient
+from api.binance_client import BinanceWSClient
 from core.state import State
 from core.maker import Maker
 from referral import check_if_referred, apply_referral, REFERRAL_CODE
@@ -69,6 +70,15 @@ async def main(config_path: str):
     market_ws = MarketWSClient()
     user_ws = UserWSClient(auth)
     
+    # Initialize Binance WS Check
+    binance_ws = None
+    if config.binance_symbol:
+        logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
+        binance_ws = BinanceWSClient(config.binance_symbol)
+    else:
+        logger.info("Binance WS not configured, using StandX price for volatility.")
+    
+    # Initialize state
     # Initialize state
     state = State()
     
@@ -106,6 +116,15 @@ async def main(config_path: str):
                 logger.debug(f"Price update: {last_price}")
         
         market_ws.on_price(on_price)
+        
+        # Wire Binance WS Callbacks
+        if binance_ws:
+            def on_binance_price(price: float):
+                maker.on_cex_price_update(price)
+                # Note: Dont double confirm price here, handled in maker
+            
+            binance_ws.on_price(on_binance_price)
+            # await binance_ws.run() # Handled by task list below
         
         # Register order callback to detect fills
         def on_order(data):
@@ -158,6 +177,9 @@ async def main(config_path: str):
             asyncio.create_task(shutdown_event.wait(), name="shutdown"),
         ]
         
+        if binance_ws:
+             tasks.append(asyncio.create_task(binance_ws.run(), name="binance_ws"))
+        
         logger.info("Bot started, press Ctrl+C to stop")
         
         # Wait for shutdown or any task to complete
@@ -170,6 +192,8 @@ async def main(config_path: str):
         await maker.stop()
         await market_ws.close()
         await user_ws.close()
+        if binance_ws:
+            await binance_ws.close()
         
         # Cancel pending tasks with timeout
         for task in pending:

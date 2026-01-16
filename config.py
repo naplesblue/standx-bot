@@ -31,6 +31,8 @@ class Config:
     recovery_volatility_bps: int = 25
     stop_loss_cooldown_sec: int = 600
     recovery_check_interval_sec: int = 300
+    binance_symbol: str = None
+    binance_staleness_sec: float = 5.0
     
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -54,6 +56,8 @@ class Config:
             recovery_volatility_bps=data.get("recovery_volatility_bps", 25),
             stop_loss_cooldown_sec=data.get("stop_loss_cooldown_sec", 600),
             recovery_check_interval_sec=data.get("recovery_check_interval_sec", 300),
+            binance_symbol=data.get("binance_symbol"),
+            binance_staleness_sec=data.get("binance_staleness_sec", 5.0),
         )
 
 

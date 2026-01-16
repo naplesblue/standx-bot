@@ -99,14 +99,25 @@ class Maker:
             f"sell_order={self.state.has_order('sell')}"
         )
     
+    
     def on_price_update(self, price: float):
         """
-        Called when price updates from WebSocket.
-        Triggers order check if needed.
+        Called when StandX price updates.
+        Updates Anchor Price for orders.
         """
-        self.state.update_price(price, self.config.volatility_window_sec)
+        self.state.update_dex_price(price)
         
-        # Signal that we need to check orders
+        # Signal check
+        self._pending_check.set()
+
+    def on_cex_price_update(self, price: float):
+        """
+        Called when Binance price updates.
+        Updates Volatility window and signals check.
+        """
+        self.state.update_cex_price(price, self.config.volatility_window_sec)
+        
+        # Signal check (high volatility should trigger immediate reaction)
         self._pending_check.set()
     
     async def run(self):
@@ -140,9 +151,35 @@ class Maker:
     async def _tick(self):
         """Single iteration of the maker logic."""
         # Wait for price data
-        if self.state.last_price is None:
-            logger.debug("Waiting for price data...")
+        # Wait for price data
+        if self.state.last_dex_price is None:
+            logger.debug("Waiting for DEX price data...")
             return
+
+        # Step -3: Check Binance Staleness (If configured)
+        if self.config.binance_symbol:
+            import time
+            time_since_cex = time.time() - self.state.last_cex_update_time
+            if time_since_cex > self.config.binance_staleness_sec:
+                 logger.warning(
+                     f"Binance Data Stale: {time_since_cex:.1f}s > {self.config.binance_staleness_sec}s. "
+                     "Cancelling orders and pausing..."
+                 )
+                 # Cancel all orders
+                 try:
+                    orders_to_cancel = []
+                    if self.state.has_order("buy"):
+                         orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
+                    if self.state.has_order("sell"):
+                         orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
+                     
+                    if orders_to_cancel:
+                         await self.client.cancel_orders(orders_to_cancel)
+                         self.state.clear_all_orders()
+                 except Exception as e:
+                     logger.error(f"StalenessGuard: Failed to cancel orders: {e}")
+                 
+                 return
 
         # Step -2: Check Recovery Mode
         if self._stop_loss_active:

@@ -2,39 +2,27 @@
 
 StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧挂限价单获取积分，价格靠近时自动撤单避免成交。
 
-本版本加入了高级风控特性，包括波动率熔断、智能平仓、冷却机制以及 **止损恢复模式**。
+本版本加入 CEX 价格引导功能，利用 Binance 数据提前感知市场波动，实现 "先知先觉" 的风控。
 
 **原作者**: [@frozenraspberry](https://x.com/frozenraspberry)
 
-## 策略原理
+## 策略特性
 
-StandX 的 Maker Points 活动奖励挂单行为：订单在盘口停留超过 3 秒即可获得积分，无需成交。本机器人通过：
+### 1. CEX 价格引导 (CEX Price Leading)
+机器人支持连接 Binance Futures WebSocket 获取实时价格 (BookTicker)。
+*   **用途**：利用 CEX (Binance) 的数据来计算市场波动率，触发熔断。
+*   **优势**：CEX 价格通常领先 DEX 几秒，能在 StandX 价格剧烈波动前提前撤单防御。
+*   **安全性 (Data Staleness Guard)**：如果 Binance 数据发生中断或延迟超过 `binance_staleness_sec` (默认5秒)，机器人会自动识别 "致盲" 风险，**强制撤销所有挂单并暂停运行**，直到数据恢复。
 
-1.  在 mark price 两侧按配置距离挂买卖单
-2.  实时监控价格，价格靠近时撤单避免成交
-3.  **波动率熔断**：高波动时自动暂停挂单
-4.  **智能平仓**：若意外成交，优先使用 Limit 单（Maker）止盈平仓，赚取积分；仅在盈利覆盖手续费时使用 Market 单平仓。
+### 2. 双数据流架构
+*   **StandX 流**：用于获取 Mark Price，作为挂单的基准锚点 (Anchor)，确保挂单价格贴合 DEX 盘口，避免基差风险。
+*   **Binance 流**：用于计算 Volatility，作为风控的触发器。
 
-## 新增特性 (Advanced Features)
-
-### 1. 波动率熔断 (Volatility Guard)
-当市场短期波动率（基于 n 秒内的最高/最低价振幅）超过设定阈值 `volatility_threshold_bps` 时，机器人将由 `volatility_pause_sec` 控制暂停挂单一段时间（默认 30秒）。这有效防止在 "插针" 行情中被有毒流量成交。
-
-### 2. 冷却机制 (Cool-down)
-每当发生一笔成交（Fill）后，机器人会强制进入冷却期 `fill_cooldown_sec`（默认 10秒）。这给予市场喘息时间，防止在单边趋势中连续接飞刀，导致瞬间满仓。
-
-### 3. 自愈式止损恢复 (Stop Loss Recovery)
-当触发 `stop_loss_usd` 后，机器人**不会退出程序**，而是进入"恢复模式"：
-1.  **平仓并暂停**：市价平仓，暂停 `stop_loss_cooldown_sec` (默认10分钟)。
-2.  **环境监测**：暂停结束后，检查过去 `recovery_window_sec` (5分钟) 的波动率。
-3.  **自动恢复**：如果波动率低于 `recovery_volatility_bps` (0.25%)，自动恢复挂单；否则继续等待。
-
-### 4. (Maker Exit) 智能做市平仓
-当持有仓位时，机器人不再盲目等待原来的 Skew 调整。如果不触及紧急止损或激进止盈线，它会尝试在 `成本价 + Taker手续费 + 微利` 的位置挂出平仓单。
-*   **优势**：把被套的 "事故" 转化为赚取 Maker 积分的 "机会"。
-
-### 5. (Aggressive Profit Take) 激进止盈
-如果持仓盈利（uPNL）超过了 `min_profit_usd`（足以覆盖 Taker 费），机器人会不再等待，**立即市价平仓**。这是为了快速释放仓位，回归无风险的挂单挖矿状态。
+### 3. 高级风控 (已包含)
+*   **波动率熔断**: 高波动时撤单暂停。
+*   **冷却机制**: 成交后暂停接单。
+*   **自愈式止损**: 触发止损后暂停观察，行情平稳后自动恢复。
+*   **智能平仓**: 优先 Maker 限价平仓赚积分。
 
 ## 安装
 
@@ -44,86 +32,53 @@ pip install -r requirements.txt
 
 ## 配置
 
-复制配置模板并填写钱包私钥：
-
-```bash
-cp config.example.yaml config.yaml
-```
-
-编辑 `config.yaml`：
+参考 `config.example.yaml`：
 
 ```yaml
 wallet:
-  chain: bsc # bsc | solana
+  chain: bsc
   private_key: "YOUR_PRIVATE_KEY_HERE"
 
 symbol: BTC-USD
+binance_symbol: BTCUSDT  # [新增] 设置 Binance 对应交易对，启用 CEX 引导
 
-# 挂单参数（bps = 0.01%，即 10 bps = 0.1%）
-order_distance_bps: 20       # 挂单距离 mark_price 的 bps
-cancel_distance_bps: 10      # 价格靠近到这个距离时撤单（避免成交）
-rebalance_distance_bps: 30   # 价格远离超过这个距离时撤单（重新挂更优价格）
-order_size_btc: 0.01         # 单笔挂单大小
+# 挂单参数
+order_distance_bps: 20
+cancel_distance_bps: 10
+rebalance_distance_bps: 30
+order_size_btc: 0.01
 
-# 仓位控制
-max_position_btc: 0.1        # 最大持仓（绝对值），超过停止做市
-stop_loss_usd: 50.0          # 紧急止损（美元），亏损超过此值全平并停止
+# 仓位与安全
+max_position_btc: 0.1
+stop_loss_usd: 50.0
 
-# 高级风控与平仓逻辑
-max_skew_bps: 0              # 库存倾斜参数（0表示不倾斜，建议保持0）
-taker_fee_rate: 0.0004       # 交易所 Taker 费率 (0.04%)
-min_profit_bps: 2            # Maker Exit 追求的最小利润点 (bps)
-min_profit_usd: 0.1          # 激进止盈触发的最小美元利润（需覆盖手续费）
-fill_cooldown_sec: 10        # 成交后的冷却观察期（秒）
-volatility_pause_sec: 30     # 波动率熔断后的暂停时间（秒）
+# 高级参数
+binance_staleness_sec: 5.0  # [新增] Binance 数据最大允许延迟(秒)
+taker_fee_rate: 0.0004
+min_profit_bps: 2
+fill_cooldown_sec: 10
+volatility_pause_sec: 30
+volatility_window_sec: 5
+volatility_threshold_bps: 5
 
-# 止损恢复模式
-stop_loss_cooldown_sec: 600      # 止损后暂停秒数 (10分钟)
-recovery_window_sec: 300         # 恢复检查的波动率窗口 (5分钟)
-recovery_volatility_bps: 25      # 允许恢复的最大波动率 (0.25%)
-recovery_check_interval_sec: 300 # 再次检查的间隔 (5分钟)
-
-# 波动率控制
-volatility_window_sec: 5     # 观察窗口秒数
-volatility_threshold_bps: 5  # 窗口内波动小于此值才允许挂单
+# 恢复模式
+stop_loss_cooldown_sec: 600
+recovery_window_sec: 300
+recovery_volatility_bps: 25
+recovery_check_interval_sec: 300
 ```
 
 ## 运行
-
-启动做市机器人：
 
 ```bash
 python main.py
 ```
 
-指定配置文件：
+## 注意事项
 
-```bash
-python main.py --config my_config.yaml
-```
-
-## 日志文件
-
-程序运行时会生成以下日志文件（已在 `.gitignore` 中排除）：
-
-| 文件                   | 说明                                           |
-| ---------------------- | ---------------------------------------------- |
-| `latency_<config>.log` | API 调用延迟记录，格式：`时间戳,接口,延迟毫秒` |
-| `reduce_<config>.log`  | 减仓/平仓记录                                  |
-| `status.log`           | 监控脚本的账户状态快照                         |
-
-## 风险提示
-
-1.  **私钥安全**：`config.yaml` 包含钱包私钥，请勿提交到公开仓库
-2.  **做市风险**：本策略本质是赚取积分而非交易价差。在极端单边行情中，即使有风控，仍可能产生亏损。
-3.  **作者不对使用本策略造成的任何损失负责**。建议先以极小资金（如 0.001 BTC）进行测试。
+1.  **网络要求**：启用 `binance_symbol` 后，服务器必须能连通 Binance API (`wss://fstream.binance.com`)。
+2.  **断线保护**：如果无法连接 Binance，机器人会因为 CEX 数据陈旧机制 (Staleness Guard) 而持续处于暂停状态（Cancel All & Pause）。这是设计好的安全行为。
 
 ## 许可证
 
 MIT License
-
-使用本项目时请标明作者 Twitter: [@frozenraspberry](https://x.com/frozenraspberry)
-
----
-
-免责声明：本软件仅供学习和研究使用。使用本软件进行交易的所有风险由使用者自行承担。作者不对任何交易损失负责。
