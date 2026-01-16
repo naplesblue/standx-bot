@@ -33,6 +33,9 @@ class Config:
     recovery_check_interval_sec: int = 300
     binance_symbol: str = None
     binance_staleness_sec: float = 5.0
+    spread_threshold_bps: int = 20
+    spread_recovery_bps: int = 10
+    spread_recovery_sec: int = 10
     
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -58,6 +61,9 @@ class Config:
             recovery_check_interval_sec=data.get("recovery_check_interval_sec", 300),
             binance_symbol=data.get("binance_symbol"),
             binance_staleness_sec=data.get("binance_staleness_sec", 5.0),
+            spread_threshold_bps=data.get("spread_threshold_bps", 20),
+            spread_recovery_bps=data.get("spread_recovery_bps", 10),
+            spread_recovery_sec=data.get("spread_recovery_sec", 10),
         )
 
 

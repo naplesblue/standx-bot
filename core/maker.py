@@ -62,6 +62,11 @@ class Maker:
         # Recovery mode state
         self._stop_loss_active = False
         self._next_recovery_check = 0.0
+
+        # Spread Guard state
+        self._spread_guard_active = False
+        self._spread_stable_start_time: Optional[float] = None
+        self._last_spread_warn_time = 0.0
     
     async def initialize(self):
         """Initialize state from exchange."""
@@ -214,6 +219,72 @@ class Maker:
                     f"波动率 {volatility:.2f}bps，开始恢复挂单。",
                     priority="normal"
                 )
+        
+        # Step -1.5: Spread Guard (CEX vs DEX Deviation)
+        # Only check if active (have both prices)
+        if self.config.binance_symbol and self.state.last_cex_price and self.state.last_dex_price:
+            import time
+            dex_price = self.state.last_dex_price
+            cex_price = self.state.last_cex_price
+            
+            if dex_price > 0:
+                spread_bps = abs(cex_price - dex_price) / dex_price * 10000
+                now = time.time()
+                
+                # Check 1: Trigger Guard
+                if spread_bps > self.config.spread_threshold_bps:
+                    # Reset recovery timer
+                    self._spread_stable_start_time = None
+                    
+                    if not self._spread_guard_active:
+                        logger.warning(
+                            f"Spread Guard TRIGGERED: Spread {spread_bps:.1f}bps > {self.config.spread_threshold_bps}bps. "
+                            "Cancelling orders and pausing..."
+                        )
+                        self._spread_guard_active = True
+                        # Cancel orders immediately
+                        try:
+                            # Reuse cancellation logic - move to helper method potentially in future
+                            orders_to_cancel = []
+                            if self.state.has_order("buy"): orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
+                            if self.state.has_order("sell"): orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
+                            if orders_to_cancel:
+                                await self.client.cancel_orders(orders_to_cancel)
+                                self.state.clear_all_orders()
+                        except Exception as e:
+                            logger.error(f"SpreadGuard: Failed to cancel orders: {e}")
+                    else:
+                        # Log periodically
+                        if now - self._last_spread_warn_time > 10:
+                             logger.warning(f"Spread Guard Active: Spread {spread_bps:.1f}bps")
+                             self._last_spread_warn_time = now
+                    
+                    return # Pause
+                
+                # Check 2: Recovery Logic (Only if guard is active)
+                if self._spread_guard_active:
+                    if spread_bps < self.config.spread_recovery_bps:
+                        if self._spread_stable_start_time is None:
+                            self._spread_stable_start_time = now
+                            logger.info(f"Spread stabilizing ({spread_bps:.1f}bps)... waiting for {self.config.spread_recovery_sec}s")
+                        
+                        stable_duration = now - self._spread_stable_start_time
+                        if stable_duration >= self.config.spread_recovery_sec:
+                            logger.info(f"Spread Stabilized ({spread_bps:.1f}bps for {stable_duration:.1f}s). Resuming...")
+                            self._spread_guard_active = False
+                            self._spread_stable_start_time = None
+                        else:
+                            return # Still waiting for timer
+                            
+                    else:
+                        # Spread is between recovery and threshold, OR jumped back up
+                        # If it jumped up > threshold, it's handled above.
+                        # If it is between (e.g. 15bps, threshold 20, recovery 10), we are NOT stable.
+                        if self._spread_stable_start_time is not None:
+                            logger.info(f"Spread unstable again ({spread_bps:.1f}bps). Resetting timer.")
+                            self._spread_stable_start_time = None
+                        
+                        return # Stay allowed to pause
         
         # Step -1: Check volatility guard
         # Use short-term window for immediate guard

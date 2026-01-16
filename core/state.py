@@ -31,6 +31,7 @@ class State:
     
     # Price data
     last_dex_price: Optional[float] = None
+    last_cex_price: Optional[float] = None
     last_cex_update_time: float = 0.0
     price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
     
@@ -65,6 +66,7 @@ class State:
         """
         with self._lock:
             now = time.time()
+            self.last_cex_price = price
             self.last_cex_update_time = now
             self.price_window.append((now, price))
             
