@@ -13,7 +13,9 @@ import requests
 
 from config import Config
 from api.http_client import StandXHTTPClient
+from api.http_client import StandXHTTPClient
 from core.state import State, OpenOrder
+from core.monitor import EfficiencyMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,13 @@ class Maker:
         # Spread Guard state
         self._spread_guard_active = False
         self._spread_stable_start_time: Optional[float] = None
+        self._spread_guard_active = False
+        self._spread_stable_start_time: Optional[float] = None
         self._last_spread_warn_time = 0.0
+        
+        # Performance Monitor
+        self.monitor = EfficiencyMonitor()
+        self._last_tick_time = 0.0
     
     async def initialize(self):
         """Initialize state from exchange."""
@@ -157,6 +165,14 @@ class Maker:
     
     async def _tick(self):
         """Single iteration of the maker logic."""
+        import time
+        now = time.time()
+        if self._last_tick_time > 0:
+            dt = now - self._last_tick_time
+        else:
+            dt = 0
+        self._last_tick_time = now
+
         # Wait for price data
         # Wait for price data
         if self.state.last_dex_price is None:
@@ -241,6 +257,7 @@ class Maker:
                     if not self._spread_guard_active:
                         logger.warning(
                             f"Spread Guard TRIGGERED: Spread {spread_bps:.1f}bps > {self.config.spread_threshold_bps}bps. "
+                            f"Prices: Binance={cex_price:.2f}, StandX={dex_price:.2f}. "
                             "Cancelling orders and pausing..."
                         )
                         self._spread_guard_active = True
@@ -291,6 +308,20 @@ class Maker:
         # Step -1: Check volatility guard (Legacy removed)
         # Replaced by Spread Guard and Staleness Guard
         pass
+        
+        # Update Efficiency Stats
+        if self.state.last_dex_price:
+            buy_price = None
+            sell_price = None
+            if self.state.has_order("buy"):
+                buy_price = self.state.get_order("buy").price
+            if self.state.has_order("sell"):
+                sell_price = self.state.get_order("sell").price
+            
+            self.monitor.update(self.state.last_dex_price, buy_price, sell_price, dt)
+            
+            if self.monitor.should_report(300): # 5 minutes
+                logger.info(self.monitor.get_report())
 
         # Step -2: Check cool-down
         import time

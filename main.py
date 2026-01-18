@@ -20,11 +20,17 @@ from core.maker import Maker
 from referral import check_if_referred, apply_referral, REFERRAL_CODE
 
 
-# Configure logging
+from logging.handlers import RotatingFileHandler
+import os
+
+# Configure logging with rotation
+log_file = "standx_bot.log"
+handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[handler, logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
