@@ -3,26 +3,47 @@ wallet:
   private_key: "YOUR_PRIVATE_KEY_HERE"
 
 symbol: BTC-USD
+binance_symbol: BTCUSDT  # 设置 Binance 对应交易对，启用 CEX 价格引导 (必填项，否则部分风控不生效)
 
-# 挂单参数
-order_distance_bps: 10 # 挂单默认距离 last_price 的 bps
-cancel_distance_bps: 5 # 价格靠近到这个距离时撤单（太近）
-rebalance_distance_bps: 20 # 价格远离超过这个距离时撤单（太远）
-order_size_btc: 0.01 # 单笔挂单大小
+# 基础挂单参数
+order_distance_bps: 20       # 挂单距离: 初始挂单偏离 Mark Price 的基点数 (default: 20)
+cancel_distance_bps: 10      # 撤单距离: 当价格靠近到此距离时撤单避险 (default: 10)
+rebalance_distance_bps: 30   # 重平衡距离: 当价格飘远超过此距离时撤单重挂 (default: 30)
+order_size_btc: 0.01         # 单笔挂单数量
+min_profit_bps: 2            # 最小利润: 平仓时的最小利润要求 (default: 2)
+fill_cooldown_sec: 10        # 交易冷却: 成交后暂停挂单的秒数 (default: 10)
 
-# 仓位控制
-max_position_btc: 0.1 # 最大持仓（绝对值），超过停止做市
+# 仓位控制与库存倾斜
+max_position_btc: 0.1        # 最大持仓: 绝对值超过此数值将停止开仓 (default: 0.1)
+max_skew_bps: 0              # 库存倾斜: 根据持仓调整挂单价格中心的最大基点数 (default: 0)
 
-# 波动率控制
-volatility_window_sec: 5 # 观察窗口秒数
-volatility_threshold_bps: 5 # 窗口内波动小于此值才允许挂单
+# 止损机制 (Stop Loss)
+stop_loss_usd: 50.0          # 触发止损的浮亏金额(USD)，0表示关闭 (default: 0.0)
+stop_loss_cooldown_sec: 600  # 止损后暂停交易的秒数 (恢复模式等待期) (default: 600)
 
-# 库存倾斜 (Inventory Skewing)
-max_skew_bps: 20 # 最大倾斜点数 (满仓时挂单偏移量)
+# 高级风控 - 价差熔断 (Spread Guard)
+# 依赖 binance_symbol 配置
+spread_threshold_bps: 20     # 熔断阈值: 当 CEX 与 DEX 价差超过此 bps 时立即全撤 (default: 20)
+spread_recovery_bps: 10      # 恢复阈值: 价差回落到此 bps 以下才开始尝试恢复 (default: 10)
+spread_recovery_sec: 10      # 稳定时间: 价差需要持续低于恢复阈值多少秒才恢复挂单 (default: 10)
 
-# 有效止损 (Stop Loss)
-stop_loss_usd: 5.0 # 浮亏超过此数值(美金)立即清仓并停止机器人 (0表示关闭)
+# 高级风控 - 数据有效性 (Staleness Guard)
+binance_staleness_sec: 5.0   # 数据过期: Binance 价格数据超过多少秒未更新则熔断 (default: 5.0)
+
+# 恢复模式 (Recovery Mode)
+# 止损触发后进入恢复模式，需满足以下波动率条件才恢复交易
+recovery_window_sec: 300     # 波动率计算窗口 (default: 300)
+recovery_volatility_bps: 25  # 允许恢复的最大波动率 (default: 25)
+recovery_check_interval_sec: 300 # 每次检查波动率的间隔 (default: 300)
+
+# 交易费率
+taker_fee_rate: 0.0004       # 预估 Taker 费率，用于计算保本平仓价 (default: 0.0004)
 
 # 消息通知 (Telegram)
-telegram_bot_token: "YOUR_BOT_TOKEN"
-telegram_chat_id: "YOUR_CHAT_ID"
+webhook_url: ""              # (Legacy) 通用 Webhook URL
+telegram_bot_token: ""       # Telegram Bot Token (从 BotFather 获取)
+telegram_chat_id: ""         # Telegram Chat ID (接收通知的用户 ID)
+
+# 废弃参数 (保留以免报错，不再生效)
+volatility_window_sec: 5
+volatility_threshold_bps: 5

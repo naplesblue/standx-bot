@@ -4,8 +4,6 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 
 本版本加入 CEX 价格引导功能，利用 Binance 数据提前感知市场波动，实现 "先知先觉" 的风控。
 
-**原作者**: [@frozenraspberry](https://x.com/frozenraspberry)
-
 ## 策略特性
 
 ### 1. CEX 价格引导 (CEX Price Leading)
@@ -117,3 +115,5 @@ python check_spread.py  # 实时查看 CEX/DEX 价差
 ## 许可证
 
 MIT License
+
+**原作者**: [@frozenraspberry](https://x.com/frozenraspberry)
