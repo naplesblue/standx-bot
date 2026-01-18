@@ -681,7 +681,6 @@ class Maker:
                             price="0",
                             order_type="market",
                             reduce_only=True,
-                            reduce_only=True,
                             cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
                         )
                         self.monitor.record_order()
