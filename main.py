@@ -15,6 +15,7 @@ from api.auth import StandXAuth
 from api.http_client import StandXHTTPClient
 from api.ws_client import MarketWSClient, UserWSClient
 from api.binance_client import BinanceWSClient
+from api.telegram import TelegramBot
 from core.state import State
 from core.maker import Maker
 from referral import check_if_referred, apply_referral, REFERRAL_CODE
@@ -98,6 +99,14 @@ async def main(config_path: str):
         binance_ws = BinanceWSClient(config.binance_symbol)
     else:
         logger.info("Binance WS not configured, using StandX price for volatility.")
+    
+    # Initialize Telegram Bot
+    telegram_bot = None
+    if config.telegram_bot_token and config.telegram_chat_id:
+        logger.info("Initializing Telegram Bot...")
+        telegram_bot = TelegramBot(config.telegram_bot_token, config.telegram_chat_id)
+    else:
+        logger.info("Telegram Bot not configured, skipping.")
     
     # Initialize state
     # Initialize state
@@ -201,6 +210,9 @@ async def main(config_path: str):
         
         if binance_ws:
              tasks.append(asyncio.create_task(binance_ws.run(), name="binance_ws"))
+
+        if telegram_bot:
+             tasks.append(asyncio.create_task(telegram_bot.run(), name="telegram_bot"))
         
         logger.info("Bot started, press Ctrl+C to stop")
         
@@ -216,6 +228,8 @@ async def main(config_path: str):
         await user_ws.close()
         if binance_ws:
             await binance_ws.close()
+        if telegram_bot:
+            telegram_bot.stop()
         
         # Cancel pending tasks with timeout
         for task in pending:

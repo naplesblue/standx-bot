@@ -29,8 +29,11 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
     *   **Stats**: 统计周期内的 **下单数(Orders)**、**撤单数(Cancels)**、**成交数(Fills)**。
 *   **日志优化**: 自动轮转（单文件最大10MB，保留5个备份），防止磁盘爆满。
 
-### 4. 远程报告 (Telegram Report) [新增]
-包含一个 Python 脚本 `report_efficiency.py`，用于生成过去 6 小时的效率汇总并推送至 Telegram。
+### 4. 远程监控 (Telegram Bot) [升级]
+配置 Telegram 后，机器人支持两项功能：
+1.  **自动推送**: 每 6 小时自动推送效率报告（配合 Cron 脚本）。
+2.  **交互查询**: 在 Telegram Bot 发送 `/status` 指令，机器人会立即回复过去 4 小时的效率汇总。
+    *   **安全保护**: 仅响应 `config.yaml` 中配置的 `telegram_chat_id` 用户的指令，拒绝 unauthorized 访问。
 
 **配置**:
 在 `config.yaml` 中添加：
@@ -39,11 +42,10 @@ telegram_bot_token: "YOUR_BOT_TOKEN"
 telegram_chat_id: "YOUR_CHAT_ID"
 ```
 
-**运行**:
+**运行自动推送 (Crontab)**:
 ```bash
 python report_efficiency.py --hours 6
 ```
-建议使用 `crontab` 设置每 6 小时自动运行一次。
 
 ### 5. 其他特性 (已包含)
 *   **冷却机制**: 成交后暂停接单。
@@ -94,6 +96,11 @@ stop_loss_cooldown_sec: 600
 recovery_window_sec: 300     # 恢复前观察窗口
 recovery_volatility_bps: 25  # 恢复阈值(波动率)
 recovery_check_interval_sec: 300
+
+# 消息通知 (Telegram)
+webhook_url: ""              # (Legacy) 通用 Webhook URL
+telegram_bot_token: ""       # Telegram Bot Token (从 BotFather 获取)
+telegram_chat_id: ""         # Telegram Chat ID (接收通知的用户 ID)
 ```
 
 ## 运行
