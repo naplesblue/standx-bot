@@ -32,6 +32,21 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[handler, logging.StreamHandler()]
 )
+
+# Silence noisy third-party libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# Configure separate logger for efficiency reports
+efficiency_logger = logging.getLogger("standx.efficiency")
+efficiency_logger.setLevel(logging.INFO)
+efficiency_logger.propagate = False  # Don't duplicate in main log
+
+eff_handler = RotatingFileHandler("efficiency.log", maxBytes=5*1024*1024, backupCount=3)
+eff_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+efficiency_logger.addHandler(eff_handler)
+
 logger = logging.getLogger(__name__)
 
 

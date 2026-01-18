@@ -321,7 +321,8 @@ class Maker:
             self.monitor.update(self.state.last_dex_price, buy_price, sell_price, dt)
             
             if self.monitor.should_report(300): # 5 minutes
-                logger.info(self.monitor.get_report())
+                # Use dedicated logger for efficiency reports
+                logging.getLogger("standx.efficiency").info(self.monitor.get_report())
 
         # Step -2: Check cool-down
         import time
