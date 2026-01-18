@@ -10,7 +10,7 @@ import json
 import logging
 import argparse
 from datetime import datetime, timedelta
-import requests
+import httpx
 from config import load_config
 
 # Configure logging
@@ -40,7 +40,7 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     
     # Regex to extract timestamp
     # Log format: 2026-01-18 17:00:00 | Efficiency Report (Last 300.0s):
-    timestamp_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| Efficiency Report")
+    timestamp_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Efficiency Report")
     
     # Regex to extract percentages
     tier1_pattern = re.compile(r"Tier 1.*:\s+(\d+\.\d+)%")
@@ -170,7 +170,7 @@ def send_telegram_report(stats: dict, config):
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = httpx.post(url, json=payload, timeout=10)
         if response.status_code == 200:
             logger.info("Report sent to Telegram successfully.")
         else:
