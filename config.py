@@ -35,6 +35,8 @@ class Config:
     spread_threshold_bps: int = 20
     spread_recovery_bps: int = 10
     spread_recovery_sec: int = 10
+    telegram_bot_token: str = None
+    telegram_chat_id: str = None
     
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -62,6 +64,8 @@ class Config:
             spread_threshold_bps=data.get("spread_threshold_bps", 20),
             spread_recovery_bps=data.get("spread_recovery_bps", 10),
             spread_recovery_sec=data.get("spread_recovery_sec", 10),
+            telegram_bot_token=data.get("telegram_bot_token"),
+            telegram_chat_id=data.get("telegram_chat_id"),
         )
 
 

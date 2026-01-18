@@ -31,7 +31,23 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
     *   **Stats**: 统计周期内的 **下单数(Orders)**、**撤单数(Cancels)**、**成交数(Fills)**。
 *   **日志优化**: 自动轮转（单文件最大10MB，保留5个备份），防止磁盘爆满。
 
-### 4. 其他特性 (已包含)
+### 4. 远程报告 (Telegram Report) [新增]
+包含一个 Python 脚本 `report_efficiency.py`，用于生成过去 6 小时的效率汇总并推送至 Telegram。
+
+**配置**:
+在 `config.yaml` 中添加：
+```yaml
+telegram_bot_token: "YOUR_BOT_TOKEN"
+telegram_chat_id: "YOUR_CHAT_ID"
+```
+
+**运行**:
+```bash
+python report_efficiency.py --hours 6
+```
+建议使用 `crontab` 设置每 6 小时自动运行一次。
+
+### 5. 其他特性 (已包含)
 *   **冷却机制**: 成交后暂停接单。
 *   **自愈式止损**: 触发止损后暂停观察，行情平稳后自动恢复。
 *   **智能平仓**: 优先 Maker 限价平仓赚积分。
