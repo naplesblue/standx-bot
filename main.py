@@ -166,6 +166,7 @@ async def main(config_path: str):
                         
                         if status == "filled":
                             state.record_fill()
+                            maker.monitor.record_fill()
                         
                         # Trigger a check to potentially place new order
                         maker._pending_check.set()

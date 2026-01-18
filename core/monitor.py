@@ -11,7 +11,10 @@ class EfficiencyMonitor:
             "tier2": 0.0,  # 10-30bps
             "tier3": 0.0,  # 30-100bps
             "tier4": 0.0,  # >100bps (Inefficient)
-            "total_time": 0.0
+            "total_time": 0.0,
+            "orders": 0,
+            "cancels": 0,
+            "fills": 0
         }
         self._last_report_time = time.time()
     
@@ -82,6 +85,18 @@ class EfficiencyMonitor:
         
         self._stats[current_tier] += dt
 
+    def record_order(self):
+        """Record an order placement."""
+        self._stats["orders"] += 1
+        
+    def record_cancel(self):
+        """Record an order cancellation."""
+        self._stats["cancels"] += 1
+        
+    def record_fill(self):
+        """Record a fill event."""
+        self._stats["fills"] += 1
+
     def should_report(self, interval: int = 300) -> bool:
         """Check if it's time to report stats."""
         return time.time() - self._last_report_time >= interval
@@ -102,11 +117,12 @@ class EfficiencyMonitor:
             f"  Tier 1 (0-10bps):   {t1:6.2f}%\n"
             f"  Tier 2 (10-30bps):  {t2:6.2f}%\n"
             f"  Tier 3 (30-100bps): {t3:6.2f}%\n"
-            f"  Tier 4 (>100bps):   {t4:6.2f}%"
+            f"  Tier 4 (>100bps):   {t4:6.2f}%\n"
+            f"  Stats: {self._stats['orders']} Orders, {self._stats['cancels']} Cancels, {self._stats['fills']} Fills"
         )
         
         # Reset stats
-        self._stats = {k: 0.0 for k in self._stats}
+        self._stats = {k: 0.0 if isinstance(v, float) else 0 for k, v in self._stats.items()}
         self._stats["total_time"] = 0.0
         self._last_report_time = time.time()
         

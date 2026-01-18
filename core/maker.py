@@ -199,6 +199,7 @@ class Maker:
                     if orders_to_cancel:
                          await self.client.cancel_orders(orders_to_cancel)
                          self.state.clear_all_orders()
+                         for _ in orders_to_cancel: self.monitor.record_cancel()
                  except Exception as e:
                      logger.error(f"StalenessGuard: Failed to cancel orders: {e}")
                  
@@ -270,6 +271,7 @@ class Maker:
                             if orders_to_cancel:
                                 await self.client.cancel_orders(orders_to_cancel)
                                 self.state.clear_all_orders()
+                                for _ in orders_to_cancel: self.monitor.record_cancel()
                         except Exception as e:
                             logger.error(f"SpreadGuard: Failed to cancel orders: {e}")
                     else:
@@ -387,6 +389,7 @@ class Maker:
                 try:
                     await self.client.cancel_order(order.cl_ord_id)
                     self.state.set_order(order.side, None)
+                    self.monitor.record_cancel()
                 except Exception as e:
                     logger.error(f"Failed to cancel order {order.cl_ord_id}: {e}")
                     send_notify(
@@ -507,6 +510,7 @@ class Maker:
                     price=price,
                     qty=self.config.order_size_btc,
                 ))
+                self.monitor.record_order()
                 logger.info(f"Order placed successfully: {cl_ord_id}")
             else:
                 error_msg = response.get("message", str(response))
@@ -613,6 +617,7 @@ class Maker:
             
             if response.get("code") == 0 or "id" in response:
                 logger.info(f"Close order placed: {cl_ord_id}")
+                self.monitor.record_order()
                 self._write_reduce_log("CLOSE", -reduce_qty if reduce_side == "sell" else reduce_qty, f"aggressive_exit_upnl_{upnl:.2f}")
                 send_notify(
                     "仓位止盈 (Market)",
@@ -658,6 +663,7 @@ class Maker:
                     open_orders = await self.client.query_open_orders(self.config.symbol)
                     for order in open_orders:
                         await self.client.cancel_order(order.cl_ord_id)
+                        self.monitor.record_cancel()
                 except Exception as e:
                     logger.error(f"StopLoss: Failed to cancel orders: {e}")
                 
@@ -675,8 +681,10 @@ class Maker:
                             price="0",
                             order_type="market",
                             reduce_only=True,
+                            reduce_only=True,
                             cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
                         )
+                        self.monitor.record_order()
                     except Exception as e:
                         logger.error(f"StopLoss: Failed to close position: {e}")
                 
