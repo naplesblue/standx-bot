@@ -112,7 +112,7 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     return stats
 
 
-def generate_efficiency_report_text(stats: dict, hours: int) -> str:
+def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict = None) -> str:
     """Generate formatted efficiency report text."""
     if not stats or stats["total_time"] == 0:
         return f"⚠️ StandX Bot Efficiency Report\n\nNo data found for the last {hours} hours. Bot may be down or logs missing."
@@ -129,9 +129,22 @@ def generate_efficiency_report_text(stats: dict, hours: int) -> str:
     orders_per_hour = stats['orders'] / duration_hours if duration_hours > 0 else 0
     cancels_per_hour = stats['cancels'] / duration_hours if duration_hours > 0 else 0
     
+    balance_section = ""
+    if balance_data:
+        equity = float(balance_data.get("equity", 0) or 0)
+        bal = float(balance_data.get("balance", 0) or 0)
+        upnl = float(balance_data.get("upnl", 0) or 0)
+        balance_section = (
+            f"*Account:*\n"
+            f"💰 Equity:  ${equity:,.2f}\n"
+            f"💵 Balance: ${bal:,.2f}\n"
+            f"📈 PnL:     ${upnl:,.2f}\n\n"
+        )
+    
     message = (
         f"📊 *StandX Bot Efficiency Report (Last {hours}h)*\n"
         f"⏱️ Duration Monitored: {duration_hours:.1f} hours\n\n"
+        f"{balance_section}"
         f"*Spread Efficiency:*\n"
         f"🟢 Tier 1 (0-10bps):  *{t1_pct:.1f}%*\n"
         f"🟡 Tier 2 (10-30bps): {t2_pct:.1f}%\n"

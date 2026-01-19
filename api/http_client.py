@@ -200,6 +200,15 @@ class StandXHTTPClient:
         """
         params = {"symbol": symbol}
         return await self._get("/api/query_symbol_price", params, auth=False)
+
+    async def query_balance(self) -> dict:
+        """
+        Query account balance.
+        
+        Returns:
+            Dict containing equity, balance, upnl etc.
+        """
+        return await self._get("/api/query_balance", params=None, auth=True)
     
     async def _get(self, path: str, params: dict = None, auth: bool = True) -> dict:
         """Make a GET request."""

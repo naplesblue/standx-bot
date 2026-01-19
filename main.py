@@ -104,7 +104,7 @@ async def main(config_path: str):
     telegram_bot = None
     if config.telegram_bot_token and config.telegram_chat_id:
         logger.info("Initializing Telegram Bot...")
-        telegram_bot = TelegramBot(config.telegram_bot_token, config.telegram_chat_id)
+        telegram_bot = TelegramBot(config.telegram_bot_token, config.telegram_chat_id, http_client)
     else:
         logger.info("Telegram Bot not configured, skipping.")
     

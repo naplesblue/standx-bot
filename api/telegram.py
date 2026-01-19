@@ -5,14 +5,21 @@ Handles interactive commands via long-polling.
 import logging
 import asyncio
 import httpx
+from typing import Optional
 from core.reporting import parse_efficiency_log, generate_efficiency_report_text
+# Import as TYPE_CHECKING or generic Any to avoid circular import if needed, 
+# but passing as object is fine in Python
+# If we import StandXHTTPClient it might circle main.py -> api.telegram -> api.http_client -> main logic...
+# Actually StandXHTTPClient is safe. 
+from api.http_client import StandXHTTPClient
 
 logger = logging.getLogger(__name__)
 
 class TelegramBot:
-    def __init__(self, token: str, allowed_chat_id: str):
+    def __init__(self, token: str, allowed_chat_id: str, http_client: Optional[StandXHTTPClient] = None):
         self.token = token
         self.allowed_chat_id = str(allowed_chat_id)
+        self.http_client = http_client
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.offset = 0
         self.running = False
@@ -82,9 +89,17 @@ class TelegramBot:
         # Send "Processing..." typing status or message? 
         # Just process and send.
         
+        # Query balance if client available
+        balance_data = None
+        if self.http_client:
+            try:
+                balance_data = await self.http_client.query_balance()
+            except Exception as e:
+                logger.error(f"Failed to query balance for Telegram report: {e}")
+
         # Parse logs for last 4 hours
         stats = parse_efficiency_log("efficiency.log", hours=4)
-        report_text = generate_efficiency_report_text(stats, hours=4)
+        report_text = generate_efficiency_report_text(stats, hours=4, balance_data=balance_data)
         
         await self.send_message(chat_id, report_text)
 
