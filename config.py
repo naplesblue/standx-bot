@@ -14,26 +14,26 @@ class WalletConfig:
 class Config:
     wallet: WalletConfig
     symbol: str
-    order_distance_bps: int
-    cancel_distance_bps: int
-    rebalance_distance_bps: int
+    order_distance_bps: float
+    cancel_distance_bps: float
+    rebalance_distance_bps: float
     order_size_btc: float
     max_position_btc: float
     volatility_window_sec: int
-    volatility_threshold_bps: int
-    max_skew_bps: int = 0
+    volatility_threshold_bps: float
+    max_skew_bps: float = 0
     stop_loss_usd: float = 0.0
     taker_fee_rate: float = 0.0004
-    min_profit_bps: int = 2
+    min_profit_bps: float = 2
     fill_cooldown_sec: int = 10
     recovery_window_sec: int = 300
-    recovery_volatility_bps: int = 25
+    recovery_volatility_bps: float = 25
     stop_loss_cooldown_sec: int = 600
     recovery_check_interval_sec: int = 300
     binance_symbol: str = None
     binance_staleness_sec: float = 5.0
-    spread_threshold_bps: int = 20
-    spread_recovery_bps: int = 10
+    spread_threshold_bps: float = 20
+    spread_recovery_bps: float = 10
     spread_recovery_sec: int = 10
     telegram_bot_token: str = None
     telegram_chat_id: str = None
