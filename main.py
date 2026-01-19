@@ -166,16 +166,20 @@ async def main(config_path: str):
             logger.info(f"Order update: cl_ord_id={cl_ord_id}, status={status}, side={side}")
             
             # Clear order from local state if filled or cancelled
-            if status in ("filled", "cancelled", "rejected"):
+            # Clear order from local state if filled or cancelled
+            if status.lower() in ("filled", "cancelled", "rejected"):
+                # Record fill immediately upon receipt, regardless of local state
+                # to ensure we capture it even if state was cleared or desynced
+                if status.lower() == "filled":
+                    state.record_fill()
+                    maker.monitor.record_fill()
+                    logger.info(f"Fill detected and recorded: {cl_ord_id}")
+
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)
                     if current_order and current_order.cl_ord_id == cl_ord_id:
                         logger.info(f"Order {status}: clearing {side} from state")
                         state.set_order(side, None)
-                        
-                        if status == "filled":
-                            state.record_fill()
-                            maker.monitor.record_fill()
                         
                         # Trigger a check to potentially place new order
                         maker._pending_check.set()
