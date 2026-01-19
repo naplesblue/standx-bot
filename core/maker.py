@@ -12,8 +12,6 @@ from typing import Optional
 import requests
 
 from config import Config
-from api.http_client import StandXHTTPClient
-from api.http_client import StandXHTTPClient
 from core.state import State, OpenOrder
 from core.monitor import EfficiencyMonitor
 
@@ -66,10 +64,6 @@ class Maker:
         self._next_recovery_check = 0.0
 
         # Spread Guard state
-        self._spread_guard_active = False
-        self._spread_stable_start_time: Optional[float] = None
-        self._spread_guard_active = False
-        self._spread_stable_start_time: Optional[float] = None
         self._last_spread_warn_time = 0.0
         
         # Performance Monitor
@@ -566,13 +560,11 @@ class Maker:
         current_pos = abs(self.state.position)
         if current_pos == 0:
             return False
-            
         # Check uPNL
         try:
             positions = await self.client.query_positions(self.config.symbol)
             if not positions:
                 return False
-            
             upnl = positions[0].upnl
             
             # CONDITION: Profit > Min Threshold
@@ -586,7 +578,6 @@ class Maker:
 
             if not should_reduce:
                 return False
-            
             # Calculate reduce quantity (Full Close)
             reduce_qty = current_pos
             
@@ -627,12 +618,9 @@ class Maker:
                 return True
             else:
                 logger.error(f"Close order failed: {response}")
-                return False
-                
+                    
         except Exception as e:
             logger.error(f"Failed to check/reduce position: {e}")
-            return False
-            return False
     
     async def _check_stop_loss(self) -> bool:
         """
@@ -644,12 +632,10 @@ class Maker:
         """
         if self.config.stop_loss_usd <= 0:
             return False
-            
         try:
             positions = await self.client.query_positions(self.config.symbol)
             if not positions:
                 return False
-            
             upnl = positions[0].upnl
             
             # Check critical stop loss

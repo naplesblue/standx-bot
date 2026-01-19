@@ -14,7 +14,9 @@ class EfficiencyMonitor:
             "total_time": 0.0,
             "orders": 0,
             "cancels": 0,
-            "fills": 0
+            "fills": 0,
+            "realized_pnl": 0.0,
+            "fees_paid": 0.0
         }
         self._last_report_time = time.time()
     
@@ -93,9 +95,11 @@ class EfficiencyMonitor:
         """Record an order cancellation."""
         self._stats["cancels"] += 1
         
-    def record_fill(self):
-        """Record a fill event."""
+    def record_fill(self, pnl: float = 0.0, fee: float = 0.0):
+        """Record a fill event with optional PnL and fee."""
         self._stats["fills"] += 1
+        self._stats["realized_pnl"] += pnl
+        self._stats["fees_paid"] += fee
 
     def should_report(self, interval: int = 300) -> bool:
         """Check if it's time to report stats."""
@@ -118,7 +122,9 @@ class EfficiencyMonitor:
             f"  Tier 2 (10-30bps):  {t2:6.2f}%\n"
             f"  Tier 3 (30-100bps): {t3:6.2f}%\n"
             f"  Tier 4 (>100bps):   {t4:6.2f}%\n"
-            f"  Stats: {self._stats['orders']} Orders, {self._stats['cancels']} Cancels, {self._stats['fills']} Fills"
+            f"  Tier 4 (>100bps):   {t4:6.2f}%\n"
+            f"  Stats: {self._stats['orders']} Orders, {self._stats['cancels']} Cancels, {self._stats['fills']} Fills\n"
+            f"  PnL: Realized ${self._stats['realized_pnl']:.4f}, Fees ${self._stats['fees_paid']:.4f}"
         )
         
         # Reset stats

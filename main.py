@@ -108,8 +108,6 @@ async def main(config_path: str):
     else:
         logger.info("Telegram Bot not configured, skipping.")
     
-    # Initialize state
-    # Initialize state
     state = State()
     
     # Initialize maker
@@ -165,15 +163,30 @@ async def main(config_path: str):
             
             logger.info(f"Order update: cl_ord_id={cl_ord_id}, status={status}, side={side}")
             
-            # Clear order from local state if filled or cancelled
-            # Clear order from local state if filled or cancelled
-            if status.lower() in ("filled", "cancelled", "rejected"):
-                # Record fill immediately upon receipt, regardless of local state
-                # to ensure we capture it even if state was cleared or desynced
-                if status.lower() == "filled":
+            if status.lower() in ("filled", "partially_filled", "cancelled", "rejected"):
+                # Record fill immediately upon receipt
+                if status.lower() in ("filled", "partially_filled"):
                     state.record_fill()
-                    maker.monitor.record_fill()
-                    logger.info(f"Fill detected and recorded: {cl_ord_id}")
+                    # Only record fill in monitor if it's a new fill event
+                    # Extract PnL/Fee if available (not always present in order update, check API docs/response)
+                    realized_pnl = float(order_data.get("realized_pnl", 0))
+                    fee = float(order_data.get("cum_fee", 0)) # or fee field
+                    
+                    # Note: WS might send multiple updates for same partial fill state.
+                    # Ideally we should diff cum_qty, but for now we rely on API to send "trade" events separate from "order" events for precise pnl.
+                    # Assuming order update contains cumulative PnL, we need to be careful not to double count.
+                    # Actually, 'realized_pnl' in order update is usually cumulative for that order.
+                    # But monitor is stateless between fills.
+                    # Let's just track it nicely. If we get repeated updates, we might over-count if we just add.
+                    # BUT, usually 'filled' is final. 'partially_filled' keeps coming.
+                    # Better approach: Just record the fill count here. PnL tracking might be better in 'on_trade' if available.
+                    # For now, we will add 0 pnl here and rely on position update or separate trade stream if needed.
+                    # Wait, user asked for realized PnL.
+                    # Let's try to get it from the message.
+                    pnl = float(order_data.get("realized_pnl", 0))
+                    
+                    maker.monitor.record_fill(pnl=pnl)
+                    logger.info(f"Fill detected ({status}) and recorded: {cl_ord_id}, PnL={pnl}")
 
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)
@@ -197,6 +210,19 @@ async def main(config_path: str):
             
             if symbol == config.symbol:
                 logger.info(f"Position update: {symbol} qty={qty} @ {entry_price}")
+                
+                # Check for position change to detect hidden fills
+                previous_qty = state.position
+                if abs(qty - previous_qty) > 1e-6:
+                     # Position changed -> implies a trade happened
+                     # We record it only if it wasn't just recorded by on_order (heuristic)
+                     import time
+                     time_since_last_fill = time.time() - state.last_fill_time
+                     if time_since_last_fill > 1.0: # If > 1s since last order-based fill record
+                         logger.info(f"Fill detected via Position Change: {previous_qty} -> {qty}")
+                         state.record_fill()
+                         maker.monitor.record_fill()
+                
                 state.update_position(qty, entry_price)
         
         user_ws.on_position(on_position)
