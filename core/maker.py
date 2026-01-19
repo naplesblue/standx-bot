@@ -12,6 +12,7 @@ from typing import Optional
 import requests
 
 from config import Config
+from api.http_client import StandXHTTPClient
 from core.state import State, OpenOrder
 from core.monitor import EfficiencyMonitor
 
