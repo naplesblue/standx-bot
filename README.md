@@ -11,14 +11,17 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 *   **用途**：利用 CEX (Binance) 的数据来计算市场波动率，以及监控 **CEX/DEX 价差偏离**。
 *   **优势**：CEX 价格通常领先 DEX 几秒，在 StandX 价格剧烈波动前提前撤单防御。
 
-### 2. 双重熔断机制
+### 2. 三重熔断机制 (Advanced Risk Control)
 *   **价差熔断 (Spread Guard)**: 
-    *   实时计算 `abs(Binance - StandX)` 偏离度。
-    *   如果偏离超过 `spread_threshold_bps` (默认20bps)，立即撤单并暂停。
-    *   **日志记录**: 触发时会记录详细的 Binance 和 StandX 对比价格。
-    *   **恢复机制**: 只有当偏离度回落至 `spread_recovery_bps` (默认10bps) 以下，并持续稳定 `spread_recovery_sec` (默认10秒) 后，才恢复挂单。
+    *   实时计算 `abs(Binance - StandX)` 偏离度。如果偏离超过阈值，暂停交易。
+*   **波幅熔断 (Realized Amplitude Guard)** [新增]:
+    *   监控 Binance 过去 10秒 的 **真实波幅** `(Max-Min)/Mid`。
+    *   如果波幅超过设定的阈值 (如挂单距离的 50%)，意味着 CEX 剧烈震荡，立即暂停。
+*   **趋势熔断 (Price Velocity Guard)** [新增]:
+    *   监控价格变动速率。如果 1秒 内连续出现 3次 同方向跳变，视为单边行情启动，提前预警暂停。
 *   **断线熔断 (Staleness Guard)**: 
-    *   如果 Binance 数据发生中断或延迟超过 5秒，机器人会自动识别 "致盲" 风险，强制撤销所有挂单并暂停运行，直到数据恢复。
+    *   监测 Binance 数据新鲜度，延迟超标自动熔断。
+
 
 ### 3. 效率监测 (Efficiency Monitor) [新增]
 *   **指标统计**: 机器人会自动统计挂单距离 Mark Price 的偏离度分布。
@@ -27,6 +30,8 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
     *   Tier 2 (10-30bps): 次佳区间占比
     *   Tier 3 (30-100bps): 低效区间占比
     *   **Stats**: 统计周期内的 **下单数(Orders)**、**撤单数(Cancels)**、**成交数(Fills)**。
+    *   **PnL**: 实时统计 **已实现盈亏 (Realized PnL)** 和 **交易手续费 (Fees Paid)**。
+    *   **精准统计**: 修复了漏单问题，现支持统计 **部分成交 (Partial Fills)** 和 **仓位变动** 推断成交。
 *   **日志优化**: 自动轮转（单文件最大10MB，保留5个备份），防止磁盘爆满。
 
 ### 4. 远程监控 (Telegram Bot) [升级]
@@ -89,7 +94,13 @@ spread_recovery_sec: 10      # 需持续满足恢复条件 10秒
 binance_staleness_sec: 5.0   # Binance 数据最大允许延迟
 taker_fee_rate: 0.0004
 min_profit_bps: 2
-fill_cooldown_sec: 10
+
+# ⚠️ 高级风控 - 波幅与趋势 [新增]
+# 支持小数位设置 (e.g. 9.5)
+amplitude_window_sec: 10          # 波幅计算窗口
+amplitude_ratio_threshold: 0.5    # 波幅阈值 (Order_Distance 的倍数)
+velocity_check_window_sec: 1.0    # 趋势计算窗口
+velocity_tick_threshold: 3        # 触发趋势预警的连续 Tick 数
 
 # 恢复模式 (止损后)
 stop_loss_cooldown_sec: 600
