@@ -104,6 +104,91 @@ class State:
             volatility = (max(prices) - min(prices)) / prices[-1] * 10000
             return volatility
     
+    def get_cex_amplitude(self, window_sec: int) -> float:
+        """
+        Calculate Realized Amplitude: (Max - Min) / Mid
+        Returns amplitude in BPS.
+        """
+        with self._lock:
+            if not self.price_window:
+                return 0.0
+            
+            now = time.time()
+            cutoff = now - window_sec
+            prices = [p for t, p in self.price_window if t > cutoff]
+            
+            if not prices:
+                return 0.0
+            
+            max_p = max(prices)
+            min_p = min(prices)
+            
+            if min_p == 0: 
+                return 0.0
+                
+            mid_p = (max_p + min_p) / 2
+            
+            if mid_p == 0:
+                return 0.0
+                
+            # Amplitude ratio
+            amp = (max_p - min_p) / mid_p
+            return amp * 10000 # Convert to bps
+            
+    def check_cex_velocity(self, window_sec: float, threshold_ticks: int) -> bool:
+        """
+        Check if price is moving too fast (consecutive ticks in same direction).
+        
+        Args:
+            window_sec: Time window to look back
+            threshold_ticks: Number of consecutive same-direction ticks to trigger
+            
+        Returns:
+            True if velocity/trend detected, False otherwise
+        """
+        with self._lock:
+            if len(self.price_window) < threshold_ticks + 1:
+                return False
+                
+            now = time.time()
+            cutoff = now - window_sec
+            
+            # Get recent ticks within window (in reverse order: newest first)
+            recent_ticks = [(t, p) for t, p in reversed(self.price_window) if t > cutoff]
+            
+            if len(recent_ticks) < threshold_ticks + 1:
+                return False
+            
+            # Check consecutive changes
+            # We need at least 'threshold_ticks' comparisons (requires threshold_ticks + 1 points)
+            target_count = 0
+            direction = 0 # 1 for up, -1 for down
+            
+            # Iterate through recent ticks (newest to oldest)
+            for i in range(len(recent_ticks) - 1):
+                curr_p = recent_ticks[i][1]
+                prev_p = recent_ticks[i+1][1]
+                
+                diff = curr_p - prev_p
+                if diff == 0:
+                    continue # Ignore flat ticks? Or counting as 'not directional'? Let's ignore flat.
+                
+                curr_dir = 1 if diff > 0 else -1
+                
+                if direction == 0:
+                    direction = curr_dir
+                    target_count = 1
+                elif curr_dir == direction:
+                    target_count += 1
+                else:
+                    # Direction changed, streak broken
+                    break
+                
+                if target_count >= threshold_ticks:
+                    return True
+                    
+            return False
+    
     def update_position(self, qty: float, entry_price: float = 0.0):
         """Update position quantity and entry price."""
         with self._lock:

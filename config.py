@@ -35,6 +35,12 @@ class Config:
     spread_threshold_bps: float = 20
     spread_recovery_bps: float = 10
     spread_recovery_sec: int = 10
+    
+    # Advanced Risk Control
+    amplitude_window_sec: int = 10
+    amplitude_ratio_threshold: float = 0.5  # As ratio of order_distance
+    velocity_check_window_sec: float = 1.0
+    velocity_tick_threshold: int = 3
     telegram_bot_token: str = None
     telegram_chat_id: str = None
     
@@ -64,6 +70,10 @@ class Config:
             spread_threshold_bps=data.get("spread_threshold_bps", 20),
             spread_recovery_bps=data.get("spread_recovery_bps", 10),
             spread_recovery_sec=data.get("spread_recovery_sec", 10),
+            amplitude_window_sec=data.get("amplitude_window_sec", 10),
+            amplitude_ratio_threshold=data.get("amplitude_ratio_threshold", 0.5),
+            velocity_check_window_sec=data.get("velocity_check_window_sec", 1.0),
+            velocity_tick_threshold=data.get("velocity_tick_threshold", 3),
             telegram_bot_token=data.get("telegram_bot_token"),
             telegram_chat_id=data.get("telegram_chat_id"),
         )

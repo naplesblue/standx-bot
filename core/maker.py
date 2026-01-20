@@ -306,6 +306,52 @@ class Maker:
         # Replaced by Spread Guard and Staleness Guard
         pass
         
+        
+
+        
+        # Step -1.4: Realized Amplitude Guard
+        # Check if CEX volatility (Max-Min)/Mid > threshold * order_distance
+        if self.config.binance_symbol:
+            amp_bps = self.state.get_cex_amplitude(self.config.amplitude_window_sec)
+            threshold_bps = self.config.order_distance_bps * self.config.amplitude_ratio_threshold
+            
+            if amp_bps > threshold_bps:
+                # Log periodically
+                if getattr(self, "_last_amp_warn", 0) + 5 < now:
+                    logger.warning(
+                        f"Amplitude Guard: {amp_bps:.1f}bps > {threshold_bps:.1f}bps "
+                        f"(Win: {self.config.amplitude_window_sec}s). Pausing..."
+                    )
+                    self._last_amp_warn = now
+                
+                # Cancel orders
+                await self._cancel_all_orders("Amplitude Guard")
+                return
+
+        # Step -1.3: Price Velocity Guard
+        # Check for consecutive directional ticks
+        if self.config.binance_symbol:
+            is_trending = self.state.check_cex_velocity(
+                self.config.velocity_check_window_sec, 
+                self.config.velocity_tick_threshold
+            )
+            
+            if is_trending:
+                # Log periodically
+                if getattr(self, "_last_vel_warn", 0) + 1 < now:
+                    logger.warning(
+                        f"Velocity Guard: Trend detected ({self.config.velocity_tick_threshold} ticks in {self.config.velocity_check_window_sec}s). Pausing..."
+                    )
+                    self._last_vel_warn = now
+                
+                # Cancel orders
+                await self._cancel_all_orders("Velocity Guard")
+                return
+
+        # Step -1: Check volatility guard (Legacy removed)
+        # Replaced by Spread Guard and Staleness Guard
+        pass
+        
         # Update Efficiency Stats
         if self.state.last_dex_price:
             buy_price = None
@@ -465,6 +511,21 @@ class Maker:
         if not self.state.has_order("sell"):
             await self._place_order("sell", sell_target_price)
     
+    async def _cancel_all_orders(self, reason: str = "Risk Guard"):
+        """Helper to cancel all orders."""
+        try:
+            orders_to_cancel = []
+            if self.state.has_order("buy"): orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
+            if self.state.has_order("sell"): orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
+            
+            if orders_to_cancel:
+                logger.warning(f"{reason}: Cancelling {len(orders_to_cancel)} orders...")
+                await self.client.cancel_orders(orders_to_cancel)
+                self.state.clear_all_orders()
+                for _ in orders_to_cancel: self.monitor.record_cancel()
+        except Exception as e:
+            logger.error(f"{reason}: Failed to cancel orders: {e}")
+
     async def _place_order(self, side: str, price: float):
         """Place a single order."""
         import math
