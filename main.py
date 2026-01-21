@@ -257,7 +257,6 @@ async def main(config_path: str):
                         # Use query_history_orders which maps to /api/query_orders
                         orders = await http_client.query_history_orders(limit=100)
                         
-                        window_start = maker.monitor.last_report_start_time # Accessing protected var directly or need property?
                         # EfficiencyMonitor uses _last_report_time.
                         window_start = maker.monitor._last_report_time
                         
