@@ -29,3 +29,7 @@ Thumbs.db
 
 # PRD (Product Requirements Documents)
 prd/
+
+# Test scripts
+test_http_pnl.py
+test_pnl.py

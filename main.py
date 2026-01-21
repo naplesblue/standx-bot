@@ -9,6 +9,7 @@ import signal
 import asyncio
 import logging
 import argparse
+import time
 
 from config import load_config
 from api.auth import StandXAuth
@@ -229,9 +230,67 @@ async def main(config_path: str):
         
         # Initialize state from exchange
         await maker.initialize()
-        
+
+        # Background task to sync stats
+        async def sync_stats_task(interval: int = 60):
+            logger.info(f"Starting stats sync task (interval={interval}s)")
+            from datetime import datetime
+            
+            while not shutdown_event.is_set():
+                try:
+                    await asyncio.sleep(interval)
+                    if shutdown_event.is_set(): break
+
+                    # 1. Query Balance (Equity)
+                    try:
+                        bal_res = await http_client.query_balance()
+                        data = bal_res.get("data", {})
+                        equity = float(data.get("equity", 0))
+                        balance = float(data.get("balance", 0))
+                    except Exception as e:
+                        logger.warning(f"Sync: Failed to query balance: {e}")
+                        equity = 0.0
+                        balance = 0.0
+
+                    # 2. Query Orders (Fills & PnL in current report window)
+                    try:
+                        # Use query_history_orders which maps to /api/query_orders
+                        orders = await http_client.query_history_orders(limit=100)
+                        
+                        window_start = maker.monitor.last_report_start_time # Accessing protected var directly or need property?
+                        # EfficiencyMonitor uses _last_report_time.
+                        window_start = maker.monitor._last_report_time
+                        
+                        fills_count = 0
+                        realized_pnl = 0.0
+                        
+                        for o in orders:
+                            if o.status in ("filled", "partially_filled"):
+                                try:
+                                    t_str = o.updated_at.replace("Z", "+00:00")
+                                    dt = datetime.fromisoformat(t_str)
+                                    ts = dt.timestamp()
+                                    
+                                    if ts >= window_start:
+                                        fills_count += 1
+                                        realized_pnl += o.realized_pnl
+                                except Exception:
+                                    pass
+                                    
+                        maker.monitor.update_synced_stats(fills_count, realized_pnl, equity, balance)
+                        
+                    except Exception as e:
+                        logger.warning(f"Sync: Failed to query orders: {e}")
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Sync task error: {e}")
+                    await asyncio.sleep(5)
+
         # Start all tasks
         tasks = [
+            asyncio.create_task(sync_stats_task(), name="sync_stats"),
             asyncio.create_task(market_ws.run(), name="market_ws"),
             asyncio.create_task(user_ws.run(), name="user_ws"),
             asyncio.create_task(maker.run(), name="maker"),

@@ -16,7 +16,14 @@ class EfficiencyMonitor:
             "cancels": 0,
             "fills": 0,
             "realized_pnl": 0.0,
-            "fees_paid": 0.0
+            "fees_paid": 0.0,
+        }
+        # Synced stats from HTTP API (Report Only)
+        self._synced_stats = {
+            "fills": None,
+            "realized_pnl": None,
+            "equity": None,
+            "balance": None
         }
         self._last_report_time = time.time()
     
@@ -101,6 +108,13 @@ class EfficiencyMonitor:
         self._stats["realized_pnl"] += pnl
         self._stats["fees_paid"] += fee
 
+    def update_synced_stats(self, fills: int, pnl: float, equity: float, balance: float):
+        """Update synced stats from reliable HTTP source."""
+        self._synced_stats["fills"] = fills
+        self._synced_stats["realized_pnl"] = pnl
+        self._synced_stats["equity"] = equity
+        self._synced_stats["balance"] = balance
+
     def should_report(self, interval: int = 300) -> bool:
         """Check if it's time to report stats."""
         return time.time() - self._last_report_time >= interval
@@ -116,15 +130,35 @@ class EfficiencyMonitor:
         t3 = self._stats["tier3"] / total * 100
         t4 = self._stats["tier4"] / total * 100
         
+        # Prefer synced stats for PnL/Fills if available
+        fills = self._synced_stats["fills"] if self._synced_stats["fills"] is not None else self._stats["fills"]
+        pnl = self._synced_stats["realized_pnl"] if self._synced_stats["realized_pnl"] is not None else self._stats["realized_pnl"]
+        equity = self._synced_stats["equity"]
+        balance = self._synced_stats["balance"]
+        
         report = (
             f"Efficiency Report (Last {total:.1f}s):\n"
-            f"  Tier 1 (0-10bps):   {t1:6.2f}%\n"
-            f"  Tier 2 (10-30bps):  {t2:6.2f}%\n"
-            f"  Tier 3 (30-100bps): {t3:6.2f}%\n"
-            f"  Tier 4 (>100bps):   {t4:6.2f}%\n"
-            f"  Tier 4 (>100bps):   {t4:6.2f}%\n"
-            f"  Stats: {self._stats['orders']} Orders, {self._stats['cancels']} Cancels, {self._stats['fills']} Fills\n"
-            f"  PnL: Realized ${self._stats['realized_pnl']:.4f}, Fees ${self._stats['fees_paid']:.4f}"
+        )
+        
+        if equity is not None:
+            report += (
+                f"  Account:\n"
+                f"    Equity:  ${equity:.2f}\n"
+                f"    Balance: ${balance:.2f}\n" 
+            )
+            
+        report += (
+            f"  Spread Efficiency:\n"
+            f"    Tier 1 (0-10bps):   {t1:6.2f}%\n"
+            f"    Tier 2 (10-30bps):  {t2:6.2f}%\n"
+            f"    Tier 3 (30-100bps): {t3:6.2f}%\n"
+            f"    Tier 4 (>100bps):   {t4:6.2f}%\n"
+            f"  Operations:\n"
+            f"    Orders:  {self._stats['orders']}\n"
+            f"    Cancels: {self._stats['cancels']}\n"
+            f"    Fills:   {fills}\n"
+            f"    PnL:     Realized ${pnl:.4f}\n"
+            f"    Fees:    ${self._stats['fees_paid']:.4f}\n" 
         )
         
         # Reset stats

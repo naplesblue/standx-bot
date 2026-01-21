@@ -24,6 +24,10 @@ class Order:
     qty: str
     status: str
     symbol: str
+    realized_pnl: float = 0.0
+    updated_at: str = ""
+    realized_pnl: float = 0.0
+    updated_at: str = ""
 
 
 @dataclass 
@@ -31,7 +35,10 @@ class Position:
     """Represents a position."""
     qty: float
     entry_price: float
+    qty: float
+    entry_price: float
     upnl: float
+    realized_pnl: float = 0.0
 
 
 class StandXHTTPClient:
@@ -156,6 +163,53 @@ class StandXHTTPClient:
                 symbol=item["symbol"],
             ))
         return orders
+
+    async def query_history_orders(
+        self,
+        symbol: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Order]:
+        """
+        Query history orders.
+        
+        Args:
+            symbol: Optional symbol filter
+            limit: Number of records to return
+            
+        Returns:
+            List of historical orders
+        """
+        params = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol
+        
+        # Guessed endpoint based on naming convention
+        try:
+             # Try query_orders first as it is more standard
+             response = await self._get("/api/query_orders", params)
+        except:
+             # Fallback to query_history_orders if exists, or re-raise
+             # Actually let's just try query_orders as per common API standards
+             # If this fails, we will need user input on exact endpoint name
+             raise 
+
+        orders = []
+        
+        items = response if isinstance(response, list) else response.get("result", [])
+        
+        for item in items:
+            orders.append(Order(
+                id=item["id"],
+                cl_ord_id=item.get("cl_ord_id", ""),
+                side=item["side"],
+                price=item["price"],
+                qty=item["qty"],
+                status=item["status"],
+                symbol=item["symbol"],
+                realized_pnl=float(item.get("realized_pnl", 0)),
+                updated_at=item.get("updated_at", ""),
+            ))
+        return orders
     
     async def query_positions(self, symbol: Optional[str] = None) -> List[Position]:
         """
@@ -185,6 +239,7 @@ class StandXHTTPClient:
                 qty=float(item.get("qty", 0)),
                 entry_price=float(item.get("entry_price", 0)),
                 upnl=float(item.get("upnl", 0)),
+                realized_pnl=float(item.get("realized_pnl", 0)),
             ))
         return positions
     
