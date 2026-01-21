@@ -89,17 +89,29 @@ class TelegramBot:
         # Send "Processing..." typing status or message? 
         # Just process and send.
         
-        # Query balance if client available
+        # Query balance and positions if client available
         balance_data = None
+        realized_pnl = None
         if self.http_client:
             try:
                 balance_data = await self.http_client.query_balance()
+                
+                # Fetch positions to get cumulative realized PnL from exchange
+                # Hardcoded symbol BTC-USD for now, or use from config? 
+                # TelegramBot doesn't have config. Assume BTC-USD or None (all)
+                # But query_positions returns list.
+                # User URL example: /api/query_positions?symbol=BTC-USD
+                positions = await self.http_client.query_positions(symbol="BTC-USD")
+                if positions:
+                    # Sum realized PnL of all open positions (usually just 1 for this bot)
+                    # Actually query_positions returns total realized pnl for that position/contract
+                    realized_pnl = sum(p.realized_pnl for p in positions)
             except Exception as e:
-                logger.error(f"Failed to query balance for Telegram report: {e}")
+                logger.error(f"Failed to query data for Telegram report: {e}")
 
         # Parse logs for last 4 hours
         stats = parse_efficiency_log("efficiency.log", hours=4)
-        report_text = generate_efficiency_report_text(stats, hours=4, balance_data=balance_data)
+        report_text = generate_efficiency_report_text(stats, hours=4, balance_data=balance_data, realized_pnl=realized_pnl)
         
         await self.send_message(chat_id, report_text)
 

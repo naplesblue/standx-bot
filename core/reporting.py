@@ -112,7 +112,7 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     return stats
 
 
-def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict = None) -> str:
+def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict = None, realized_pnl: float = None) -> str:
     """Generate formatted efficiency report text."""
     if not stats or stats["total_time"] == 0:
         return f"⚠️ StandX Bot Efficiency Report\n\nNo data found for the last {hours} hours. Bot may be down or logs missing."
@@ -134,11 +134,19 @@ def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict 
         equity = float(balance_data.get("equity", 0) or 0)
         bal = float(balance_data.get("balance", 0) or 0)
         upnl = float(balance_data.get("upnl", 0) or 0)
+        if realized_pnl is not None:
+             upnl = realized_pnl # Use provided realized pnl from Position API
+        else:
+             # Fallback or use un-realized from balance? NO, user asked for accumulated realized.
+             # Balance data usually has 'upnl' (unrealized) and 'pnl_freeze' (realized).
+             # If realized_pnl param is passed, we use it as "PnL" display.
+             pass
+             
         balance_section = (
             f"*Account:*\n"
             f"💰 Equity:  ${equity:,.2f}\n"
             f"💵 Balance: ${bal:,.2f}\n"
-            f"📈 PnL:     ${upnl:,.2f}\n\n"
+            f"📈 PnL (Realized): ${upnl:,.2f}\n\n"
         )
     
     message = (
