@@ -43,7 +43,15 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     tier4_pattern = re.compile(r"Tier 4.*:\s+(\d+\.\d+)%")
     
     # Regex for stats
-    stats_pattern = re.compile(r"Stats: (\d+) Orders, (\d+) Cancels, (\d+) Fills")
+    # Regex for stats (Multi-line format compatible)
+    # New format:
+    #   Operations:
+    #     Orders:  X
+    #     Cancels: Y
+    #     Fills:   Z
+    orders_pattern = re.compile(r"Orders:\s+(\d+)")
+    cancels_pattern = re.compile(r"Cancels:\s+(\d+)")
+    fills_pattern = re.compile(r"Fills:\s+(\d+)")
     
     try:
         current_entry_time = None
@@ -99,11 +107,16 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
                     t4 = tier4_pattern.search(line)
                     if t4: stats["tier4_time"] += float(t4.group(1)) * current_duration / 100
                     
-                    st = stats_pattern.search(line)
-                    if st:
-                        stats["orders"] += int(st.group(1))
-                        stats["cancels"] += int(st.group(2))
-                        stats["fills"] += int(st.group(3))
+                    
+                    # Parse operations from separate lines
+                    ord_match = orders_pattern.search(line)
+                    if ord_match: stats["orders"] += int(ord_match.group(1))
+                    
+                    cnl_match = cancels_pattern.search(line)
+                    if cnl_match: stats["cancels"] += int(cnl_match.group(1))
+                    
+                    fil_match = fills_pattern.search(line)
+                    if fil_match: stats["fills"] += int(fil_match.group(1))
 
     except Exception as e:
         logger.error(f"Error parsing log: {e}")
