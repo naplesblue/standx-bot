@@ -32,8 +32,10 @@ class State:
     # Price data
     last_dex_price: Optional[float] = None
     last_cex_price: Optional[float] = None
+    last_dex_update_time: float = 0.0
     last_cex_update_time: float = 0.0
-    price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
+    cex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
+    dex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
     
     # Position
     position: float = 0.0
@@ -53,10 +55,16 @@ class State:
         """Alias for last_dex_price for backward compatibility."""
         return self.last_dex_price
 
-    def update_dex_price(self, price: float):
-        """Update DEX price (Anchor for orders)."""
+    def update_dex_price(self, price: float, window_sec: int = 3600):
+        """Update DEX price (Anchor for orders) and maintain sliding window."""
         with self._lock:
+            now = time.time()
             self.last_dex_price = price
+            self.last_dex_update_time = now
+            self.dex_price_window.append((now, price))
+
+            cutoff = now - window_sec
+            self.dex_price_window = [(t, p) for t, p in self.dex_price_window if t > cutoff]
 
     def update_cex_price(self, price: float, window_sec: int = 3600):
         """Update CEX price (Source for Volatility) and maintain sliding window.
@@ -68,13 +76,22 @@ class State:
             now = time.time()
             self.last_cex_price = price
             self.last_cex_update_time = now
-            self.price_window.append((now, price))
+            self.cex_price_window.append((now, price))
             
             # Clean up old data
             cutoff = now - window_sec
-            self.price_window = [(t, p) for t, p in self.price_window if t > cutoff]
-    
-    def get_volatility_bps(self, window_sec: Optional[int] = None) -> float:
+            self.cex_price_window = [(t, p) for t, p in self.cex_price_window if t > cutoff]
+
+    def _get_window(self, source: str):
+        if source == "cex":
+            return self.cex_price_window
+        if source == "dex":
+            return self.dex_price_window
+        if self.cex_price_window:
+            return self.cex_price_window
+        return self.dex_price_window
+
+    def get_volatility_bps(self, window_sec: Optional[int] = None, source: str = "auto") -> float:
         """
         Calculate volatility in bps over the price window.
         
@@ -85,15 +102,16 @@ class State:
             Volatility in basis points, or 0 if insufficient data
         """
         with self._lock:
-            if not self.price_window:
+            window = self._get_window(source)
+            if not window:
                 return 0.0
                 
             now = time.time()
             if window_sec:
                 cutoff = now - window_sec
-                prices = [p for t, p in self.price_window if t > cutoff]
+                prices = [p for t, p in window if t > cutoff]
             else:
-                prices = [p for _, p in self.price_window]
+                prices = [p for _, p in window]
             
             if len(prices) < 2:
                 return 0.0
@@ -110,12 +128,12 @@ class State:
         Returns amplitude in BPS.
         """
         with self._lock:
-            if not self.price_window:
+            if not self.cex_price_window:
                 return 0.0
             
             now = time.time()
             cutoff = now - window_sec
-            prices = [p for t, p in self.price_window if t > cutoff]
+            prices = [p for t, p in self.cex_price_window if t > cutoff]
             
             if not prices:
                 return 0.0
@@ -147,47 +165,56 @@ class State:
             True if velocity/trend detected, False otherwise
         """
         with self._lock:
-            if len(self.price_window) < threshold_ticks + 1:
-                return False
-                
-            now = time.time()
-            cutoff = now - window_sec
-            
-            # Get recent ticks within window (in reverse order: newest first)
-            recent_ticks = [(t, p) for t, p in reversed(self.price_window) if t > cutoff]
-            
-            if len(recent_ticks) < threshold_ticks + 1:
-                return False
-            
-            # Check consecutive changes
-            # We need at least 'threshold_ticks' comparisons (requires threshold_ticks + 1 points)
-            target_count = 0
-            direction = 0 # 1 for up, -1 for down
-            
-            # Iterate through recent ticks (newest to oldest)
-            for i in range(len(recent_ticks) - 1):
-                curr_p = recent_ticks[i][1]
-                prev_p = recent_ticks[i+1][1]
-                
-                diff = curr_p - prev_p
-                if diff == 0:
-                    continue # Ignore flat ticks? Or counting as 'not directional'? Let's ignore flat.
-                
-                curr_dir = 1 if diff > 0 else -1
-                
-                if direction == 0:
-                    direction = curr_dir
-                    target_count = 1
-                elif curr_dir == direction:
-                    target_count += 1
-                else:
-                    # Direction changed, streak broken
-                    break
-                
-                if target_count >= threshold_ticks:
-                    return True
-                    
-            return False
+            direction = self._get_consecutive_direction(self.cex_price_window, window_sec, threshold_ticks)
+            return direction != 0
+
+    def get_trend_direction(self, window_sec: float, threshold_ticks: int, source: str = "auto") -> int:
+        """
+        Return trend direction based on consecutive ticks.
+        1 for up, -1 for down, 0 for no clear trend.
+        """
+        with self._lock:
+            window = self._get_window(source)
+            return self._get_consecutive_direction(window, window_sec, threshold_ticks)
+
+    def _get_consecutive_direction(self, window: list, window_sec: float, threshold_ticks: int) -> int:
+        if len(window) < threshold_ticks + 1:
+            return 0
+
+        now = time.time()
+        cutoff = now - window_sec
+
+        # Get recent ticks within window (in reverse order: newest first)
+        recent_ticks = [(t, p) for t, p in reversed(window) if t > cutoff]
+
+        if len(recent_ticks) < threshold_ticks + 1:
+            return 0
+
+        target_count = 0
+        direction = 0  # 1 for up, -1 for down
+
+        for i in range(len(recent_ticks) - 1):
+            curr_p = recent_ticks[i][1]
+            prev_p = recent_ticks[i + 1][1]
+
+            diff = curr_p - prev_p
+            if diff == 0:
+                continue
+
+            curr_dir = 1 if diff > 0 else -1
+
+            if direction == 0:
+                direction = curr_dir
+                target_count = 1
+            elif curr_dir == direction:
+                target_count += 1
+            else:
+                break
+
+            if target_count >= threshold_ticks:
+                return direction
+
+        return 0
     
     def update_position(self, qty: float, entry_price: float = 0.0):
         """Update position quantity and entry price."""
@@ -210,6 +237,14 @@ class State:
                 logger.info(f"Order set: {side} {order.qty} @ {order.price} (cl_ord_id: {order.cl_ord_id})")
             else:
                 logger.info(f"Order cleared: {side}")
+
+    def update_order_qty(self, side: str, qty: float):
+        """Update open order quantity."""
+        with self._lock:
+            order = self.open_orders.get(side)
+            if order:
+                order.qty = qty
+                logger.info(f"Order qty updated: {side} {qty}")
     
     def get_order(self, side: str) -> Optional[OpenOrder]:
         """Get current order for a side."""

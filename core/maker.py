@@ -64,8 +64,12 @@ class Maker:
         self._stop_loss_active = False
         self._next_recovery_check = 0.0
 
-        # Spread Guard state
-        self._last_spread_warn_time = 0.0
+        # Risk guard state
+        self._risk_guard_active = False
+        self._risk_guard_reason = ""
+        self._risk_guard_cooldown_until = 0.0
+        self._risk_guard_stable_start = None
+        self._last_risk_warn_time = 0.0
         
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
@@ -78,7 +82,7 @@ class Maker:
         # Get current position
         positions = await self.client.query_positions(self.config.symbol)
         if positions:
-            self.state.update_position(positions[0].qty)
+            self.state.update_position(positions[0].qty, positions[0].entry_price)
         else:
             self.state.update_position(0.0)
         
@@ -113,7 +117,7 @@ class Maker:
         Called when StandX price updates.
         Updates Anchor Price for orders.
         """
-        self.state.update_dex_price(price)
+        self.state.update_dex_price(price, window_sec=3600)
         
         # Signal check
         self._pending_check.set()
@@ -169,38 +173,11 @@ class Maker:
         self._last_tick_time = now
 
         # Wait for price data
-        # Wait for price data
         if self.state.last_dex_price is None:
             logger.debug("Waiting for DEX price data...")
             return
 
-        # Step -3: Check Binance Staleness (If configured)
-        if self.config.binance_symbol:
-            import time
-            time_since_cex = time.time() - self.state.last_cex_update_time
-            if time_since_cex > self.config.binance_staleness_sec:
-                 logger.warning(
-                     f"Binance Data Stale: {time_since_cex:.1f}s > {self.config.binance_staleness_sec}s. "
-                     "Cancelling orders and pausing..."
-                 )
-                 # Cancel all orders
-                 try:
-                    orders_to_cancel = []
-                    if self.state.has_order("buy"):
-                         orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
-                    if self.state.has_order("sell"):
-                         orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
-                     
-                    if orders_to_cancel:
-                         await self.client.cancel_orders(orders_to_cancel)
-                         self.state.clear_all_orders()
-                         for _ in orders_to_cancel: self.monitor.record_cancel()
-                 except Exception as e:
-                     logger.error(f"StalenessGuard: Failed to cancel orders: {e}")
-                 
-                 return
-
-        # Step -2: Check Recovery Mode
+        # Step -3: Check Recovery Mode
         if self._stop_loss_active:
             import time
             now = time.time()
@@ -233,124 +210,157 @@ class Maker:
                     f"波动率 {volatility:.2f}bps，开始恢复挂单。",
                     priority="normal"
                 )
-        
-        # Step -1.5: Spread Guard (CEX vs DEX Deviation)
-        # Only check if active (have both prices)
+
+        # Step -2.5: Stop loss check (prioritize)
+        stop_triggered = await self._check_stop_loss()
+        if stop_triggered:
+            return
+
+        # Step -2: DEX Staleness Guard
+        if self.config.dex_staleness_sec > 0 and self.state.last_dex_update_time > 0:
+            time_since_dex = now - self.state.last_dex_update_time
+            if time_since_dex > self.config.dex_staleness_sec:
+                await self._activate_risk_guard(
+                    f"DEX Data Stale: {time_since_dex:.1f}s > {self.config.dex_staleness_sec}s"
+                )
+                return
+
+        # Step -2: CEX Staleness Guard (If configured)
+        if self.config.binance_symbol:
+            time_since_cex = now - self.state.last_cex_update_time
+            if time_since_cex > self.config.binance_staleness_sec:
+                await self._activate_risk_guard(
+                    f"Binance Data Stale: {time_since_cex:.1f}s > {self.config.binance_staleness_sec}s"
+                )
+                return
+
+        trend_source = "cex" if self.config.binance_symbol else "dex"
+        vol_bps, vol_ratio = self._get_volatility_ratio()
+        tight_bps, far_bps, cancel_bps = self._get_dynamic_distances(vol_ratio)
+
+        spread_bps = None
         if self.config.binance_symbol and self.state.last_cex_price and self.state.last_dex_price:
-            import time
             dex_price = self.state.last_dex_price
             cex_price = self.state.last_cex_price
-            
             if dex_price > 0:
                 spread_bps = abs(cex_price - dex_price) / dex_price * 10000
-                now = time.time()
-                
-                # Check 1: Trigger Guard
-                if spread_bps > self.config.spread_threshold_bps:
-                    # Reset recovery timer
-                    self._spread_stable_start_time = None
-                    
-                    if not self._spread_guard_active:
-                        logger.warning(
-                            f"Spread Guard TRIGGERED: Spread {spread_bps:.1f}bps > {self.config.spread_threshold_bps}bps. "
-                            f"Prices: Binance={cex_price:.2f}, StandX={dex_price:.2f}. "
-                            "Cancelling orders and pausing..."
-                        )
-                        self._spread_guard_active = True
-                        # Cancel orders immediately
-                        try:
-                            # Reuse cancellation logic - move to helper method potentially in future
-                            orders_to_cancel = []
-                            if self.state.has_order("buy"): orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
-                            if self.state.has_order("sell"): orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
-                            if orders_to_cancel:
-                                await self.client.cancel_orders(orders_to_cancel)
-                                self.state.clear_all_orders()
-                                for _ in orders_to_cancel: self.monitor.record_cancel()
-                        except Exception as e:
-                            logger.error(f"SpreadGuard: Failed to cancel orders: {e}")
-                    else:
-                        # Log periodically
-                        if now - self._last_spread_warn_time > 10:
-                             logger.warning(f"Spread Guard Active: Spread {spread_bps:.1f}bps")
-                             self._last_spread_warn_time = now
-                    
-                    return # Pause
-                
-                # Check 2: Recovery Logic (Only if guard is active)
-                if self._spread_guard_active:
-                    if spread_bps < self.config.spread_recovery_bps:
-                        if self._spread_stable_start_time is None:
-                            self._spread_stable_start_time = now
-                            logger.info(f"Spread stabilizing ({spread_bps:.1f}bps)... waiting for {self.config.spread_recovery_sec}s")
-                        
-                        stable_duration = now - self._spread_stable_start_time
-                        if stable_duration >= self.config.spread_recovery_sec:
-                            logger.info(f"Spread Stabilized ({spread_bps:.1f}bps for {stable_duration:.1f}s). Resuming...")
-                            self._spread_guard_active = False
-                            self._spread_stable_start_time = None
-                        else:
-                            return # Still waiting for timer
-                            
-                    else:
-                        # Spread is between recovery and threshold, OR jumped back up
-                        # If it jumped up > threshold, it's handled above.
-                        # If it is between (e.g. 15bps, threshold 20, recovery 10), we are NOT stable.
-                        if self._spread_stable_start_time is not None:
-                            logger.info(f"Spread unstable again ({spread_bps:.1f}bps). Resetting timer.")
-                            self._spread_stable_start_time = None
-                        
-                        return # Stay allowed to pause
-        
-        # Step -1: Check volatility guard (Legacy removed)
-        # Replaced by Spread Guard and Staleness Guard
-        pass
-        
-        
 
-        
-        # Step -1.4: Realized Amplitude Guard
-        # Check if CEX volatility (Max-Min)/Mid > threshold * order_distance
+        amp_bps = 0.0
         if self.config.binance_symbol:
             amp_bps = self.state.get_cex_amplitude(self.config.amplitude_window_sec)
-            threshold_bps = self.config.order_distance_bps * self.config.amplitude_ratio_threshold
-            
-            if amp_bps > threshold_bps:
-                # Log periodically
-                if getattr(self, "_last_amp_warn", 0) + 5 < now:
+
+        guard_trend_dir = self.state.get_trend_direction(
+            self.config.velocity_check_window_sec,
+            self.config.velocity_tick_threshold,
+            source=trend_source,
+        )
+        warn_trend_dir = self.state.get_trend_direction(
+            self.config.velocity_check_window_sec,
+            self.config.velocity_warn_tick_threshold,
+            source=trend_source,
+        )
+
+        # Step -1.8: Risk guard cooldown / recovery
+        if self._risk_guard_active:
+            if now < self._risk_guard_cooldown_until:
+                if now - self._last_risk_warn_time > 5:
                     logger.warning(
-                        f"Amplitude Guard: {amp_bps:.1f}bps > {threshold_bps:.1f}bps "
-                        f"(Win: {self.config.amplitude_window_sec}s). Pausing..."
+                        f"Risk Guard Active: {self._risk_guard_reason}. "
+                        f"Cooldown {self._risk_guard_cooldown_until - now:.0f}s"
                     )
-                    self._last_amp_warn = now
-                
-                # Cancel orders
-                await self._cancel_all_orders("Amplitude Guard")
+                    self._last_risk_warn_time = now
                 return
 
-        # Step -1.3: Price Velocity Guard
-        # Check for consecutive directional ticks
-        if self.config.binance_symbol:
-            is_trending = self.state.check_cex_velocity(
-                self.config.velocity_check_window_sec, 
-                self.config.velocity_tick_threshold
+            amp_warn_bps = tight_bps * self.config.amplitude_warn_ratio_threshold
+            stable = True
+            if spread_bps is not None and spread_bps > self.config.spread_recovery_bps:
+                stable = False
+            if vol_bps > self.config.recovery_volatility_bps:
+                stable = False
+            if warn_trend_dir != 0:
+                stable = False
+            if amp_bps > amp_warn_bps:
+                stable = False
+
+            if stable:
+                if self._risk_guard_stable_start is None:
+                    self._risk_guard_stable_start = now
+                    logger.info(
+                        f"Risk Guard stabilizing... waiting for {self.config.risk_recovery_stable_sec}s"
+                    )
+                stable_duration = now - self._risk_guard_stable_start
+                if stable_duration < self.config.risk_recovery_stable_sec:
+                    return
+                logger.info("Risk Guard stabilized. Resuming trading...")
+                self._risk_guard_active = False
+                self._risk_guard_reason = ""
+                self._risk_guard_stable_start = None
+            else:
+                if self._risk_guard_stable_start is not None:
+                    logger.info("Risk Guard unstable again. Resetting timer.")
+                    self._risk_guard_stable_start = None
+                return
+
+        # Step -1.6: Guard triggers (full pause)
+        if spread_bps is not None and spread_bps > self.config.spread_threshold_bps:
+            await self._activate_risk_guard(
+                f"Spread Guard: {spread_bps:.1f}bps > {self.config.spread_threshold_bps}bps"
             )
-            
-            if is_trending:
-                # Log periodically
-                if getattr(self, "_last_vel_warn", 0) + 1 < now:
-                    logger.warning(
-                        f"Velocity Guard: Trend detected ({self.config.velocity_tick_threshold} ticks in {self.config.velocity_check_window_sec}s). Pausing..."
-                    )
-                    self._last_vel_warn = now
-                
-                # Cancel orders
-                await self._cancel_all_orders("Velocity Guard")
-                return
+            return
 
-        # Step -1: Check volatility guard (Legacy removed)
-        # Replaced by Spread Guard and Staleness Guard
-        pass
+        amp_guard_bps = tight_bps * self.config.amplitude_ratio_threshold
+        if self.config.binance_symbol and amp_bps > amp_guard_bps:
+            await self._activate_risk_guard(
+                f"Amplitude Guard: {amp_bps:.1f}bps > {amp_guard_bps:.1f}bps"
+            )
+            return
+
+        if guard_trend_dir != 0:
+            await self._activate_risk_guard(
+                f"Velocity Guard: trend detected ({self.config.velocity_tick_threshold} ticks in {self.config.velocity_check_window_sec}s)"
+            )
+            return
+
+        # Step -1.2: Risk caution mode (single-side quoting)
+        caution = False
+        if self.config.volatility_threshold_bps > 0 and vol_bps > self.config.volatility_threshold_bps:
+            caution = True
+        if spread_bps is not None and spread_bps > self.config.spread_warn_bps:
+            caution = True
+        if amp_bps > tight_bps * self.config.amplitude_warn_ratio_threshold:
+            caution = True
+        if warn_trend_dir != 0:
+            caution = True
+
+        base_buy_bps = tight_bps
+        base_sell_bps = tight_bps
+        near_side = None
+
+        if caution:
+            direction = warn_trend_dir
+            if direction == 0:
+                direction = self.state.get_trend_direction(
+                    self.config.velocity_check_window_sec,
+                    1,
+                    source=trend_source,
+                )
+
+            if direction >= 0:
+                near_side = "buy"
+                base_sell_bps = far_bps
+            else:
+                near_side = "sell"
+                base_buy_bps = far_bps
+        
+        # Step -1: Allowed sides based on inventory and risk
+        allowed_sides = {"buy", "sell"}
+        if caution and near_side and not self.config.caution_other_side_enabled:
+            allowed_sides = {near_side}
+
+        if self.state.position > 0:
+            allowed_sides = {"sell"}
+        elif self.state.position < 0:
+            allowed_sides = {"buy"}
         
         # Update Efficiency Stats
         if self.state.last_dex_price:
@@ -374,11 +384,6 @@ class Maker:
            logger.debug(f"Cool-down active: {time_since_fill:.1f}s < {self.config.fill_cooldown_sec}s")
            return
         
-        # Step 0: Check stop loss
-        stop_triggered = await self._check_stop_loss()
-        if stop_triggered:
-            return  # Stop everything if stop loss triggers
-        
         # Step 1: Check if should reduce position (> 50% and profitable)
         # We do this BEFORE max position check to allow exiting even if full
         reduced = await self._check_and_reduce_position()
@@ -393,26 +398,27 @@ class Maker:
             )
             return
         
-        if reduced:
-            return  # Skip this tick after reducing
-        
         # Step 2: Calculate skew and targets
         skew_bps = self._get_skew_bps()
         
         # Buy target: increase distance if skew > 0 (long), decrease if skew < 0 (short)
-        buy_target = max(0, self.config.order_distance_bps + skew_bps)
+        buy_target = max(0, base_buy_bps + skew_bps)
         
         # Sell target: decrease distance if skew > 0 (long), increase if skew < 0 (short)
-        sell_target = max(0, self.config.order_distance_bps - skew_bps)
+        sell_target = max(0, base_sell_bps - skew_bps)
         
         # Calculate tolerant bounds
         # Lower bound: target - (order - cancel) => target - tolerance
-        tolerance_lower = max(1, self.config.order_distance_bps - self.config.cancel_distance_bps)
+        buy_cancel_bps = min(cancel_bps, max(0.1, base_buy_bps - 0.1))
+        sell_cancel_bps = min(cancel_bps, max(0.1, base_sell_bps - 0.1))
+        buy_tolerance_lower = max(0.1, base_buy_bps - buy_cancel_bps)
+        sell_tolerance_lower = max(0.1, base_sell_bps - sell_cancel_bps)
         # Upper bound: target + (rebalance - order) => target + tolerance
-        tolerance_upper = max(1, self.config.rebalance_distance_bps - self.config.order_distance_bps)
+        buy_tolerance_upper = max(1, self.config.rebalance_distance_bps - base_buy_bps)
+        sell_tolerance_upper = max(1, self.config.rebalance_distance_bps - base_sell_bps)
         
-        buy_bounds = (max(0, buy_target - tolerance_lower), buy_target + tolerance_upper)
-        sell_bounds = (max(0, sell_target - tolerance_lower), sell_target + tolerance_upper)
+        buy_bounds = (max(0, buy_target - buy_tolerance_lower), buy_target + buy_tolerance_upper)
+        sell_bounds = (max(0, sell_target - sell_tolerance_lower), sell_target + sell_tolerance_upper)
         
         if abs(skew_bps) > 1:
             logger.debug(
@@ -423,6 +429,14 @@ class Maker:
         
         # Step 3: Check and cancel orders
         orders_to_cancel = self.state.get_orders_to_cancel(buy_bounds, sell_bounds)
+
+        for side in ("buy", "sell"):
+            if side not in allowed_sides and self.state.has_order(side):
+                orders_to_cancel.append(self.state.get_order(side))
+
+        if orders_to_cancel:
+            orders_by_id = {order.cl_ord_id: order for order in orders_to_cancel if order}
+            orders_to_cancel = list(orders_by_id.values())
         
         if orders_to_cancel:
             for order in orders_to_cancel:
@@ -447,7 +461,8 @@ class Maker:
         pass
         
         # Step 5: Place missing orders
-        await self._place_missing_orders(buy_target, sell_target)
+        exit_qty = abs(self.state.position) if self.state.position != 0 else None
+        await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)
     
     def _get_skew_bps(self) -> float:
         """Calculate inventory skew in bps."""
@@ -460,7 +475,13 @@ class Maker:
         
         return ratio * self.config.max_skew_bps
     
-    async def _place_missing_orders(self, buy_target_bps: float, sell_target_bps: float):
+    async def _place_missing_orders(
+        self,
+        buy_target_bps: float,
+        sell_target_bps: float,
+        allowed_sides: set[str],
+        exit_qty: Optional[float] = None,
+    ):
         """Place buy and sell orders if missing."""
         last_price = self.state.last_price
         if last_price is None:
@@ -474,7 +495,17 @@ class Maker:
         # If we have a position, we want to close it with a Limit Order at Entry + Fee + Profit
         position_qty = self.state.position
         entry_price = self.state.entry_price
-        
+        exit_side = None
+        reduce_only = False
+        exit_qty = abs(position_qty) if position_qty != 0 and exit_qty is None else exit_qty
+
+        if position_qty > 0:
+            exit_side = "sell"
+            reduce_only = True
+        elif position_qty < 0:
+            exit_side = "buy"
+            reduce_only = True
+
         if entry_price > 0 and position_qty != 0:
             # Calculate break-even exit price including taker fee (for safety comparison) and maker rebate benefit
             # Taker Fee Rate: self.config.taker_fee_rate (e.g. 0.0004)
@@ -504,12 +535,16 @@ class Maker:
                     buy_target_price = min(buy_target_price, exit_price)
 
         # Place buy order if missing
-        if not self.state.has_order("buy"):
-            await self._place_order("buy", buy_target_price)
+        if "buy" in allowed_sides and not self.state.has_order("buy"):
+            qty = exit_qty if exit_side == "buy" else None
+            if qty is None or qty > 0:
+                await self._place_order("buy", buy_target_price, qty=qty, reduce_only=reduce_only and exit_side == "buy")
         
         # Place sell order if missing
-        if not self.state.has_order("sell"):
-            await self._place_order("sell", sell_target_price)
+        if "sell" in allowed_sides and not self.state.has_order("sell"):
+            qty = exit_qty if exit_side == "sell" else None
+            if qty is None or qty > 0:
+                await self._place_order("sell", sell_target_price, qty=qty, reduce_only=reduce_only and exit_side == "sell")
     
     async def _cancel_all_orders(self, reason: str = "Risk Guard"):
         """Helper to cancel all orders."""
@@ -526,7 +561,56 @@ class Maker:
         except Exception as e:
             logger.error(f"{reason}: Failed to cancel orders: {e}")
 
-    async def _place_order(self, side: str, price: float):
+    async def _activate_risk_guard(self, reason: str):
+        """Activate risk guard, cancel orders, and start cooldown timer."""
+        import time
+        now = time.time()
+
+        if not self._risk_guard_active:
+            logger.warning(f"{reason}. Cancelling orders and pausing...")
+
+        self._risk_guard_active = True
+        self._risk_guard_reason = reason
+        self._risk_guard_cooldown_until = now + self.config.risk_guard_cooldown_sec
+        self._risk_guard_stable_start = None
+
+        await self._cancel_all_orders(reason)
+
+    def _lerp(self, min_val: float, max_val: float, ratio: float) -> float:
+        return min_val + (max_val - min_val) * ratio
+
+    def _get_volatility_ratio(self) -> tuple[float, float]:
+        vol_bps = self.state.get_volatility_bps(
+            window_sec=self.config.volatility_window_sec,
+            source="auto",
+        )
+        if self.config.volatility_threshold_bps <= 0:
+            return vol_bps, 0.0
+        ratio = vol_bps / self.config.volatility_threshold_bps
+        ratio = max(0.0, min(1.0, ratio))
+        return vol_bps, ratio
+
+    def _get_dynamic_distances(self, vol_ratio: float) -> tuple[float, float, float]:
+        tight_bps = self._lerp(
+            self.config.order_distance_tight_min_bps,
+            self.config.order_distance_tight_max_bps,
+            vol_ratio,
+        )
+        far_bps = self._lerp(
+            self.config.order_distance_far_min_bps,
+            self.config.order_distance_far_max_bps,
+            vol_ratio,
+        )
+        cancel_bps = self._lerp(
+            self.config.cancel_distance_min_bps,
+            self.config.cancel_distance_max_bps,
+            vol_ratio,
+        )
+
+        cancel_bps = min(cancel_bps, max(0.1, tight_bps - 0.1))
+        return tight_bps, far_bps, cancel_bps
+
+    async def _place_order(self, side: str, price: float, qty: Optional[float] = None, reduce_only: bool = False):
         """Place a single order."""
         import math
         cl_ord_id = f"mm-{side}-{uuid.uuid4().hex[:8]}"
@@ -545,7 +629,8 @@ class Maker:
         else:
             aligned_price = math.ceil(price / tick_size) * tick_size
         price_str = f"{aligned_price:.{price_decimals}f}"
-        qty_str = f"{self.config.order_size_btc:.3f}"
+        order_qty = self.config.order_size_btc if qty is None else qty
+        qty_str = f"{order_qty:.3f}"
         
         logger.info(f"Placing {side} order: {qty_str} @ {price_str} (cl_ord_id: {cl_ord_id})")
         
@@ -556,6 +641,7 @@ class Maker:
                 qty=qty_str,
                 price=price_str,
                 cl_ord_id=cl_ord_id,
+                reduce_only=reduce_only,
             )
             
             if response.get("code") == 0:
@@ -564,7 +650,7 @@ class Maker:
                     cl_ord_id=cl_ord_id,
                     side=side,
                     price=price,
-                    qty=self.config.order_size_btc,
+                    qty=order_qty,
                 ))
                 self.monitor.record_order()
                 logger.info(f"Order placed successfully: {cl_ord_id}")
@@ -712,6 +798,7 @@ class Maker:
                     for order in open_orders:
                         await self.client.cancel_order(order.cl_ord_id)
                         self.monitor.record_cancel()
+                    self.state.clear_all_orders()
                 except Exception as e:
                     logger.error(f"StopLoss: Failed to cancel orders: {e}")
                 

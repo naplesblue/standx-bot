@@ -164,7 +164,7 @@ async def main(config_path: str):
             
             logger.info(f"Order update: cl_ord_id={cl_ord_id}, status={status}, side={side}")
             
-            if status.lower() in ("filled", "partially_filled", "cancelled", "rejected"):
+            if status and status.lower() in ("filled", "partially_filled", "cancelled", "rejected"):
                 # Record fill immediately upon receipt
                 if status.lower() in ("filled", "partially_filled"):
                     state.record_fill()
@@ -192,8 +192,20 @@ async def main(config_path: str):
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)
                     if current_order and current_order.cl_ord_id == cl_ord_id:
-                        logger.info(f"Order {status}: clearing {side} from state")
-                        state.set_order(side, None)
+                        if status.lower() in ("filled", "cancelled", "rejected"):
+                            logger.info(f"Order {status}: clearing {side} from state")
+                            state.set_order(side, None)
+                        elif status.lower() == "partially_filled":
+                            remaining_qty = (
+                                order_data.get("leaves_qty")
+                                or order_data.get("remaining_qty")
+                                or order_data.get("left_qty")
+                            )
+                            if remaining_qty is not None:
+                                try:
+                                    state.update_order_qty(side, float(remaining_qty))
+                                except Exception:
+                                    pass
                         
                         # Trigger a check to potentially place new order
                         maker._pending_check.set()

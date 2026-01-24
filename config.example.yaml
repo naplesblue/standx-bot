@@ -7,11 +7,18 @@ binance_symbol: BTCUSDT  # 设置 Binance 对应交易对，启用 CEX 价格引
 
 # 基础挂单参数
 order_distance_bps: 20       # 挂单距离: 初始挂单偏离 Mark Price 的基点数 (default: 20)
+order_distance_tight_min_bps: 8   # 低波动时靠近挂单下限
+order_distance_tight_max_bps: 10  # 低波动时靠近挂单上限
+order_distance_far_min_bps: 15    # 预警时远端挂单下限
+order_distance_far_max_bps: 30    # 预警时远端挂单上限
 cancel_distance_bps: 10      # 撤单距离: 当价格靠近到此距离时撤单避险 (default: 10)
+cancel_distance_min_bps: 7.5 # 动态撤单最小距离
+cancel_distance_max_bps: 9   # 动态撤单最大距离
 rebalance_distance_bps: 30   # 重平衡距离: 当价格飘远超过此距离时撤单重挂 (default: 30)
 order_size_btc: 0.01         # 单笔挂单数量
 min_profit_bps: 2            # 最小利润: 平仓时的最小利润要求 (default: 2)
 fill_cooldown_sec: 10        # 交易冷却: 成交后暂停挂单的秒数 (default: 10)
+caution_other_side_enabled: true # 预警时是否保留远端挂单
 
 # 仓位控制与库存倾斜
 max_position_btc: 0.1        # 最大持仓: 绝对值超过此数值将停止开仓 (default: 0.1)
@@ -24,11 +31,17 @@ stop_loss_cooldown_sec: 600  # 止损后暂停交易的秒数 (恢复模式等�
 # 高级风控 - 价差熔断 (Spread Guard)
 # 依赖 binance_symbol 配置
 spread_threshold_bps: 20     # 熔断阈值: 当 CEX 与 DEX 价差超过此 bps 时立即全撤 (default: 20)
+spread_warn_bps: 12          # 预警阈值: 触发单边挂单
 spread_recovery_bps: 10      # 恢复阈值: 价差回落到此 bps 以下才开始尝试恢复 (default: 10)
 spread_recovery_sec: 10      # 稳定时间: 价差需要持续低于恢复阈值多少秒才恢复挂单 (default: 10)
 
 # 高级风控 - 数据有效性 (Staleness Guard)
 binance_staleness_sec: 5.0   # 数据过期: Binance 价格数据超过多少秒未更新则熔断 (default: 5.0)
+dex_staleness_sec: 5.0       # DEX 价格数据超过多少秒未更新则熔断 (default: 5.0)
+
+# 高级风控 - 冷却恢复
+risk_guard_cooldown_sec: 15  # 熔断后冷却秒数
+risk_recovery_stable_sec: 15 # 恢复前稳定观察秒数
 
 # 恢复模式 (Recovery Mode)
 # 止损触发后进入恢复模式，需满足以下波动率条件才恢复交易
@@ -44,6 +57,14 @@ webhook_url: ""              # (Legacy) 通用 Webhook URL
 telegram_bot_token: ""       # Telegram Bot Token (从 BotFather 获取)
 telegram_chat_id: ""         # Telegram Chat ID (接收通知的用户 ID)
 
-# 废弃参数 (保留以免报错，不再生效)
-volatility_window_sec: 5
-volatility_threshold_bps: 5
+# 波动率控制
+volatility_window_sec: 10
+volatility_threshold_bps: 8
+
+# CEX 预警阈值
+amplitude_window_sec: 10            # 振幅计算窗口
+amplitude_ratio_threshold: 0.5      # 熔断振幅阈值 (Order_Distance 的倍数)
+amplitude_warn_ratio_threshold: 0.3 # 预警振幅阈值 (Order_Distance 的倍数)
+velocity_check_window_sec: 1.0      # 趋势计算窗口
+velocity_tick_threshold: 3          # 熔断趋势 tick 数
+velocity_warn_tick_threshold: 2     # 预警趋势 tick 数
