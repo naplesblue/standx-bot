@@ -18,6 +18,13 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     cutoff_time = now - timedelta(hours=hours)
     
     stats = {
+        "band_0_10_time": 0.0,
+        "band_10_30_time": 0.0,
+        "band_out_time": 0.0,
+        "warmup_time": 0.0,
+        "eligible_ratio_time": 0.0,
+        "weighted_efficiency_time": 0.0,
+        "warmup_threshold": None,
         "tier1_time": 0.0,
         "tier2_time": 0.0,
         "tier3_time": 0.0,
@@ -36,11 +43,19 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
     # Regex to extract duration
     duration_pattern = re.compile(r"\(Last (\d+\.?\d*)s\):")
     
-    # Regex to extract percentages
+    # Regex to extract percentages (legacy tiers)
     tier1_pattern = re.compile(r"Tier 1.*:\s+(\d+\.\d+)%")
     tier2_pattern = re.compile(r"Tier 2.*:\s+(\d+\.\d+)%")
     tier3_pattern = re.compile(r"Tier 3.*:\s+(\d+\.\d+)%")
     tier4_pattern = re.compile(r"Tier 4.*:\s+(\d+\.\d+)%")
+
+    # Regex to extract points bands (new format)
+    band_0_10_pattern = re.compile(r"0-10bps.*:\s+(\d+\.\d+)%")
+    band_10_30_pattern = re.compile(r"10-30bps.*:\s+(\d+\.\d+)%")
+    band_out_pattern = re.compile(r">30bps.*:\s+(\d+\.\d+)%")
+    warmup_pattern = re.compile(r"Warmup\s+\(<(\d+\.?\d*)s\):\s+(\d+\.\d+)%")
+    eligible_pattern = re.compile(r"Eligible Ratio:\s+(\d+\.\d+)%")
+    weighted_pattern = re.compile(r"Weighted Efficiency:\s+(\d+\.\d+)%")
     
     # Regex for stats
     # Regex for stats (Multi-line format compatible)
@@ -106,6 +121,28 @@ def parse_efficiency_log(log_path: str, hours: int = 6) -> dict:
                     
                     t4 = tier4_pattern.search(line)
                     if t4: stats["tier4_time"] += float(t4.group(1)) * current_duration / 100
+
+                    b1 = band_0_10_pattern.search(line)
+                    if b1: stats["band_0_10_time"] += float(b1.group(1)) * current_duration / 100
+
+                    b2 = band_10_30_pattern.search(line)
+                    if b2: stats["band_10_30_time"] += float(b2.group(1)) * current_duration / 100
+
+                    bout = band_out_pattern.search(line)
+                    if bout: stats["band_out_time"] += float(bout.group(1)) * current_duration / 100
+
+                    warm = warmup_pattern.search(line)
+                    if warm:
+                        stats["warmup_threshold"] = float(warm.group(1))
+                        stats["warmup_time"] += float(warm.group(2)) * current_duration / 100
+
+                    eligible = eligible_pattern.search(line)
+                    if eligible:
+                        stats["eligible_ratio_time"] += float(eligible.group(1)) * current_duration / 100
+
+                    weighted = weighted_pattern.search(line)
+                    if weighted:
+                        stats["weighted_efficiency_time"] += float(weighted.group(1)) * current_duration / 100
                     
                     
                     # Parse operations from separate lines
@@ -132,10 +169,24 @@ def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict 
     
     # Calculate percentages
     total = stats["total_time"]
-    t1_pct = stats["tier1_time"] / total * 100
-    t2_pct = stats["tier2_time"] / total * 100
-    t3_pct = stats["tier3_time"] / total * 100
-    t4_pct = stats["tier4_time"] / total * 100
+    use_points = (
+        stats["band_0_10_time"]
+        + stats["band_10_30_time"]
+        + stats["band_out_time"]
+        + stats["warmup_time"]
+    ) > 0
+    if use_points:
+        b1_pct = stats["band_0_10_time"] / total * 100
+        b2_pct = stats["band_10_30_time"] / total * 100
+        bout_pct = stats["band_out_time"] / total * 100
+        warmup_pct = stats["warmup_time"] / total * 100
+        eligible_pct = stats["eligible_ratio_time"] / total * 100
+        weighted_pct = stats["weighted_efficiency_time"] / total * 100
+    else:
+        t1_pct = stats["tier1_time"] / total * 100
+        t2_pct = stats["tier2_time"] / total * 100
+        t3_pct = stats["tier3_time"] / total * 100
+        t4_pct = stats["tier4_time"] / total * 100
     
     # Duration in hours
     duration_hours = total / 3600
@@ -162,18 +213,38 @@ def generate_efficiency_report_text(stats: dict, hours: int, balance_data: dict 
             f"📈 PnL (Realized): ${upnl:,.2f}\n\n"
         )
     
-    message = (
-        f"📊 *StandX Bot Efficiency Report (Last {hours}h)*\n"
-        f"⏱️ Duration Monitored: {duration_hours:.1f} hours\n\n"
-        f"{balance_section}"
-        f"*Spread Efficiency:*\n"
-        f"🟢 Tier 1 (0-10bps):  *{t1_pct:.1f}%*\n"
-        f"🟡 Tier 2 (10-30bps): {t2_pct:.1f}%\n"
-        f"🟠 Tier 3 (30-100bps):{t3_pct:.1f}%\n"
-        f"🔴 Inefficient:       {t4_pct:.1f}%\n\n"
-        f"*Operations:*\n"
-        f"📥 Total Orders:  {stats['orders']} ({orders_per_hour:.0f}/h)\n"
-        f"🔄 Total Cancels: {stats['cancels']} ({cancels_per_hour:.0f}/h)\n"
-        f"✅ Total Fills:   {stats['fills']}\n"
-    )
+    if use_points:
+        warmup_threshold = stats["warmup_threshold"] or 3
+        message = (
+            f"📊 *StandX Bot Efficiency Report (Last {hours}h)*\n"
+            f"⏱️ Duration Monitored: {duration_hours:.1f} hours\n\n"
+            f"{balance_section}"
+            f"*Points Bands (Notional-weighted):*\n"
+            f"🟢 0-10bps (100%):  *{b1_pct:.1f}%*\n"
+            f"🟡 10-30bps (50%): {b2_pct:.1f}%\n"
+            f"🔴 >30bps (0%):     {bout_pct:.1f}%\n"
+            f"🟤 Warmup (<{warmup_threshold:.0f}s): {warmup_pct:.1f}%\n\n"
+            f"*Points Efficiency:*\n"
+            f"✅ Eligible Ratio:      {eligible_pct:.1f}%\n"
+            f"⭐ Weighted Efficiency: {weighted_pct:.1f}%\n\n"
+            f"*Operations:*\n"
+            f"📥 Total Orders:  {stats['orders']} ({orders_per_hour:.0f}/h)\n"
+            f"🔄 Total Cancels: {stats['cancels']} ({cancels_per_hour:.0f}/h)\n"
+            f"✅ Total Fills:   {stats['fills']}\n"
+        )
+    else:
+        message = (
+            f"📊 *StandX Bot Efficiency Report (Last {hours}h)*\n"
+            f"⏱️ Duration Monitored: {duration_hours:.1f} hours\n\n"
+            f"{balance_section}"
+            f"*Spread Efficiency:*\n"
+            f"🟢 Tier 1 (0-10bps):  *{t1_pct:.1f}%*\n"
+            f"🟡 Tier 2 (10-30bps): {t2_pct:.1f}%\n"
+            f"🟠 Tier 3 (30-100bps):{t3_pct:.1f}%\n"
+            f"🔴 Inefficient:       {t4_pct:.1f}%\n\n"
+            f"*Operations:*\n"
+            f"📥 Total Orders:  {stats['orders']} ({orders_per_hour:.0f}/h)\n"
+            f"🔄 Total Cancels: {stats['cancels']} ({cancels_per_hour:.0f}/h)\n"
+            f"✅ Total Fills:   {stats['fills']}\n"
+        )
     return message
