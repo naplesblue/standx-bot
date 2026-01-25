@@ -7,10 +7,11 @@ class EfficiencyMonitor:
     
     def __init__(self):
         self._stats = {
-            "tier1": 0.0,  # 0-10bps
-            "tier2": 0.0,  # 10-30bps
-            "tier3": 0.0,  # 30-100bps
-            "tier4": 0.0,  # >100bps (Inefficient)
+            "tier1_notional_time": 0.0,  # 0-10bps (100%)
+            "tier2_notional_time": 0.0,  # 10-30bps (50%)
+            "out_of_band_notional_time": 0.0,  # >30bps (0%)
+            "warmup_notional_time": 0.0,  # < min_rest_sec
+            "total_order_notional_time": 0.0,
             "total_time": 0.0,
             "orders": 0,
             "cancels": 0,
@@ -25,74 +26,72 @@ class EfficiencyMonitor:
             "equity": None,
             "balance": None
         }
+        self._order_id = {"buy": None, "sell": None}
+        self._order_start = {"buy": None, "sell": None}
+        self._min_rest_sec = 3.0
         self._last_report_time = time.time()
     
-    def update(self, mark_price: float, buy_price: Optional[float], sell_price: Optional[float], dt: float):
+    def update(
+        self,
+        mark_price: float,
+        buy_order: Optional[object],
+        sell_order: Optional[object],
+        dt: float,
+        min_rest_sec: float = 3.0,
+    ):
         """
         Update efficiency stats based on current orders.
         
         Args:
             mark_price: Current market price (DEX)
-            buy_price: Active buy order price (None if no order)
-            sell_price: Active sell order price (None if no order)
+            buy_order: Active buy order (None if no order)
+            sell_order: Active sell order (None if no order)
             dt: Time duration since last update (seconds)
+            min_rest_sec: Minimum resting time before points accrue
         """
         if dt <= 0 or mark_price <= 0:
             return
 
+        self._min_rest_sec = min_rest_sec
         self._stats["total_time"] += dt
-        
-        # Calculate max deviation of any active order
-        max_bps = 9999.0 # Default if no orders
-        
-        buy_bps = 9999.0
-        if buy_price:
-            buy_bps = abs(buy_price - mark_price) / mark_price * 10000
-            
-        sell_bps = 9999.0
-        if sell_price:
-            sell_bps = abs(sell_price - mark_price) / mark_price * 10000
-            
-        # We consider the "Efficiency" of the bot to be defined by its best active quote? 
-        # Or should it be 'avg'? The prompt implies "Orders falling in..."
-        # If we have both, we take the worst one? Or track separately?
-        # User requirement: "Statistics of orders falling in..."
-        # Usually implies tracking the *presence* of valid quotes.
-        # Let's count efficiency if *at least one side* is in the bucket? 
-        # Or strictly *both*?
-        # Standard MM practice: You get credit if you are quoting.
-        # Let's average the presence derived from active sides for simplicity in single metric,
-        # or just track "Best Bid/Ask" which represents the spread quality.
-        # Let's use the 'worst' of the active orders to represent "Bot Efficiency" 
-        # (i.e. if one side is missing, efficiency is low).
-        
-        # Actually user said "accumulated duration of orders falling in...".
-        # Let's consider the state efficient if *both* orders are within range (ideal MM),
-        # or at least *one* if we are directional closing.
-        # For general monitoring, let's take the MAX deviation of active orders.
-        # If an order is missing, we treat it as infinite deviation (inefficient).
-        
-        relevant_bps = []
-        if buy_price: relevant_bps.append(buy_bps)
-        if sell_price: relevant_bps.append(sell_bps)
-        
-        if not relevant_bps:
-            current_tier = "tier4" # No orders
-        else:
-            # We track the "worst" deviation of active orders to be conservative.
-            # If we only have 1 order, we track that one.
-            worst_active_bps = max(relevant_bps)
-            
-            if worst_active_bps <= 10:
-                current_tier = "tier1"
-            elif worst_active_bps <= 30:
-                current_tier = "tier2"
-            elif worst_active_bps <= 100:
-                current_tier = "tier3"
+        now = time.time()
+
+        self._sync_order_state("buy", buy_order, now)
+        self._sync_order_state("sell", sell_order, now)
+
+        for side, order in (("buy", buy_order), ("sell", sell_order)):
+            if not order:
+                continue
+
+            start_time = self._order_start.get(side)
+            if start_time is None:
+                continue
+
+            notional = abs(order.qty) * mark_price
+            self._stats["total_order_notional_time"] += notional * dt
+
+            if now - start_time < min_rest_sec:
+                self._stats["warmup_notional_time"] += notional * dt
+                continue
+
+            distance_bps = abs(order.price - mark_price) / mark_price * 10000
+
+            if distance_bps <= 10:
+                self._stats["tier1_notional_time"] += notional * dt
+            elif distance_bps <= 30:
+                self._stats["tier2_notional_time"] += notional * dt
             else:
-                current_tier = "tier4"
-        
-        self._stats[current_tier] += dt
+                self._stats["out_of_band_notional_time"] += notional * dt
+
+    def _sync_order_state(self, side: str, order: Optional[object], now: float):
+        if not order:
+            self._order_id[side] = None
+            self._order_start[side] = None
+            return
+
+        if self._order_id.get(side) != order.cl_ord_id:
+            self._order_id[side] = order.cl_ord_id
+            self._order_start[side] = now
 
     def record_order(self):
         """Record an order placement."""
@@ -122,13 +121,23 @@ class EfficiencyMonitor:
     def get_report(self) -> str:
         """Generate and reset statistics report."""
         total = self._stats["total_time"]
-        if total == 0:
+        total_notional_time = self._stats["total_order_notional_time"]
+        if total == 0 or total_notional_time == 0:
             return "Efficiency: No Data"
-            
-        t1 = self._stats["tier1"] / total * 100
-        t2 = self._stats["tier2"] / total * 100
-        t3 = self._stats["tier3"] / total * 100
-        t4 = self._stats["tier4"] / total * 100
+
+        tier1 = self._stats["tier1_notional_time"]
+        tier2 = self._stats["tier2_notional_time"]
+        out_of_band = self._stats["out_of_band_notional_time"]
+        warmup = self._stats["warmup_notional_time"]
+
+        t1 = tier1 / total_notional_time * 100
+        t2 = tier2 / total_notional_time * 100
+        t0 = out_of_band / total_notional_time * 100
+        tw = warmup / total_notional_time * 100
+
+        point_weighted = tier1 + tier2 * 0.5
+        points_efficiency = point_weighted / total_notional_time
+        eligible_ratio = (tier1 + tier2) / total_notional_time
         
         # Prefer synced stats for PnL/Fills if available
         fills = self._synced_stats["fills"] if self._synced_stats["fills"] is not None else self._stats["fills"]
@@ -148,11 +157,14 @@ class EfficiencyMonitor:
             )
             
         report += (
-            f"  Spread Efficiency:\n"
-            f"    Tier 1 (0-10bps):   {t1:6.2f}%\n"
-            f"    Tier 2 (10-30bps):  {t2:6.2f}%\n"
-            f"    Tier 3 (30-100bps): {t3:6.2f}%\n"
-            f"    Tier 4 (>100bps):   {t4:6.2f}%\n"
+            f"  Points Bands (Notional-weighted):\n"
+            f"    0-10bps (100%): {t1:6.2f}%\n"
+            f"    10-30bps (50%): {t2:6.2f}%\n"
+            f"    >30bps (0%):    {t0:6.2f}%\n"
+            f"    Warmup (<{self._min_rest_sec:.0f}s):   {tw:6.2f}%\n"
+            f"  Points Efficiency:\n"
+            f"    Eligible Ratio:      {eligible_ratio * 100:6.2f}%\n"
+            f"    Weighted Efficiency: {points_efficiency * 100:6.2f}%\n"
             f"  Operations:\n"
             f"    Orders:  {self._stats['orders']}\n"
             f"    Cancels: {self._stats['cancels']}\n"

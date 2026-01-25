@@ -364,14 +364,16 @@ class Maker:
         
         # Update Efficiency Stats
         if self.state.last_dex_price:
-            buy_price = None
-            sell_price = None
-            if self.state.has_order("buy"):
-                buy_price = self.state.get_order("buy").price
-            if self.state.has_order("sell"):
-                sell_price = self.state.get_order("sell").price
-            
-            self.monitor.update(self.state.last_dex_price, buy_price, sell_price, dt)
+            buy_order = self.state.get_order("buy") if self.state.has_order("buy") else None
+            sell_order = self.state.get_order("sell") if self.state.has_order("sell") else None
+
+            self.monitor.update(
+                self.state.last_dex_price,
+                buy_order,
+                sell_order,
+                dt,
+                min_rest_sec=self.config.maker_min_rest_sec,
+            )
             
             if self.monitor.should_report(300): # 5 minutes
                 # Use dedicated logger for efficiency reports

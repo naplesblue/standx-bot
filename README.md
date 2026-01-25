@@ -30,13 +30,15 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 ### 4. 效率监测 (Efficiency Monitor) [新增]
 *   **指标统计**: 机器人会自动统计挂单距离 Mark Price 的偏离度分布。
 *   **定期报告**: 每 5 分钟在日志(`efficiency.log`)中输出报告，包含：
-    *   Tier 1 (0-10bps): 最佳积分区间占比
-    *   Tier 2 (10-30bps): 次佳区间占比
-    *   Tier 3 (30-100bps): 低效区间占比
+    *   0-10bps (100%): 满积分区间占比
+    *   10-30bps (50%): 半积分区间占比
+    *   >30bps (0%): 无积分区间占比
+    *   Warmup (<3s): 订单未满 3 秒的停留占比
     *   **Stats**: 统计周期内的 **下单数(Orders)**、**撤单数(Cancels)**、**成交数(Fills)**。
     *   **PnL**: 实时统计 **已实现盈亏 (Realized PnL)** 和 **交易手续费 (Fees Paid)**。
     *   **精准统计**: 修复了漏单问题，现支持统计 **部分成交 (Partial Fills)** 和 **仓位变动** 推断成交。
 *   **日志优化**: 自动轮转（单文件最大10MB，保留5个备份），防止磁盘爆满。
+*   **计分规则**: 挂单需在订单簿停留超过 `maker_min_rest_sec` 才计入积分统计。
 
 ### 5. 远程监控 (Telegram Bot) [升级]
 配置 Telegram 后，机器人支持两项功能：
@@ -109,6 +111,7 @@ risk_recovery_stable_sec: 15 # 恢复前稳定观察
 caution_other_side_enabled: true # 预警时是否保留远端挂单
 taker_fee_rate: 0.0004
 min_profit_bps: 2
+maker_min_rest_sec: 3       # 挂单在订单簿停留超过该秒数才计积分
 
 # ⚠️ 高级风控 - 波幅与趋势 [新增]
 # 支持小数位设置 (e.g. 9.5)
