@@ -94,12 +94,12 @@ async def main(config_path: str):
     user_ws = UserWSClient(auth)
     
     # Initialize Binance WS Check
-        binance_ws = None
-        if config.binance_symbol:
-            logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
-            binance_ws = BinanceWSClient(config.binance_symbol, enable_kline=True)
-        else:
-            logger.info("Binance WS not configured, using StandX price for volatility.")
+    binance_ws = None
+    if config.binance_symbol:
+        logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
+        binance_ws = BinanceWSClient(config.binance_symbol, enable_kline=True)
+    else:
+        logger.info("Binance WS not configured, using StandX price for volatility.")
     
     # Initialize Telegram Bot
     telegram_bot = None
