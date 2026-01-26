@@ -52,6 +52,10 @@ class Config:
     velocity_check_window_sec: float = 1.0
     velocity_tick_threshold: int = 3
     velocity_warn_tick_threshold: int = 2
+    volume_window_sec: int = 60
+    volume_min_samples: int = 10
+    volume_warn_ratio: float = 2.5
+    volume_guard_ratio: float = 4.0
     risk_guard_cooldown_sec: int = 15
     risk_recovery_stable_sec: int = 15
     caution_other_side_enabled: bool = True
@@ -114,6 +118,10 @@ class Config:
                 "velocity_warn_tick_threshold",
                 max(1, data.get("velocity_tick_threshold", 3) - 1),
             ),
+            volume_window_sec=data.get("volume_window_sec", 60),
+            volume_min_samples=data.get("volume_min_samples", 10),
+            volume_warn_ratio=data.get("volume_warn_ratio", 2.5),
+            volume_guard_ratio=data.get("volume_guard_ratio", 4.0),
             risk_guard_cooldown_sec=data.get("risk_guard_cooldown_sec", 15),
             risk_recovery_stable_sec=data.get(
                 "risk_recovery_stable_sec",

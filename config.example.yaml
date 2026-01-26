@@ -69,3 +69,7 @@ amplitude_warn_ratio_threshold: 0.3 # 预警振幅阈值 (Order_Distance 的倍�
 velocity_check_window_sec: 1.0      # 趋势计算窗口
 velocity_tick_threshold: 3          # 熔断趋势 tick 数
 velocity_warn_tick_threshold: 2     # 预警趋势 tick 数
+volume_window_sec: 60               # 成交量基线窗口（秒）
+volume_min_samples: 10              # 触发统计所需最少样本数
+volume_warn_ratio: 2.5              # 预警倍数（当前/均值）
+volume_guard_ratio: 4.0             # 熔断倍数（当前/均值）

@@ -133,6 +133,14 @@ class Maker:
         
         # Signal check (high volatility should trigger immediate reaction)
         self._pending_check.set()
+
+    def on_cex_volume_update(self, notional: float):
+        """
+        Called when Binance 1s kline closes.
+        Updates volume window and signals check.
+        """
+        self.state.update_cex_volume(notional, window_sec=self.config.volume_window_sec)
+        self._pending_check.set()
     
     async def run(self):
         """Run the event-driven maker loop."""
@@ -249,6 +257,21 @@ class Maker:
         if self.config.binance_symbol:
             amp_bps = self.state.get_cex_amplitude(self.config.amplitude_window_sec)
 
+        volume_ratio = 0.0
+        volume_current = 0.0
+        volume_avg = 0.0
+        volume_samples = 0
+        if self.config.binance_symbol:
+            (
+                volume_ratio,
+                volume_current,
+                volume_avg,
+                volume_samples,
+            ) = self.state.get_cex_volume_ratio(
+                self.config.volume_window_sec,
+                self.config.volume_min_samples,
+            )
+
         guard_trend_dir = self.state.get_trend_direction(
             self.config.velocity_check_window_sec,
             self.config.velocity_tick_threshold,
@@ -280,6 +303,8 @@ class Maker:
             if warn_trend_dir != 0:
                 stable = False
             if amp_bps > amp_warn_bps:
+                stable = False
+            if volume_ratio > self.config.volume_warn_ratio and volume_samples >= self.config.volume_min_samples:
                 stable = False
 
             if stable:
@@ -321,6 +346,17 @@ class Maker:
             )
             return
 
+        if (
+            volume_ratio > self.config.volume_guard_ratio
+            and volume_samples >= self.config.volume_min_samples
+        ):
+            await self._activate_risk_guard(
+                "Volume Guard: "
+                f"{volume_ratio:.2f}x avg "
+                f"(cur {volume_current:.0f}, avg {volume_avg:.0f})"
+            )
+            return
+
         # Step -1.2: Risk caution mode (single-side quoting)
         caution = False
         if self.config.volatility_threshold_bps > 0 and vol_bps > self.config.volatility_threshold_bps:
@@ -330,6 +366,11 @@ class Maker:
         if amp_bps > tight_bps * self.config.amplitude_warn_ratio_threshold:
             caution = True
         if warn_trend_dir != 0:
+            caution = True
+        if (
+            volume_ratio > self.config.volume_warn_ratio
+            and volume_samples >= self.config.volume_min_samples
+        ):
             caution = True
 
         base_buy_bps = tight_bps

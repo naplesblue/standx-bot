@@ -19,6 +19,8 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
     *   如果波幅超过设定的阈值 (如挂单距离的 50%)，意味着 CEX 剧烈震荡，立即暂停。
 *   **趋势熔断 (Price Velocity Guard)** [新增]:
     *   监控价格变动速率。如果 1秒 内连续出现 3次 同方向跳变，视为单边行情启动，提前预警暂停。
+*   **成交量熔断 (Volume Guard)** [新增]:
+    *   监控 1s Kline 成交量，相对基线放量触发预警或熔断。
 *   **断线熔断 (Staleness Guard)**: 
     *   监测 CEX/DEX 数据新鲜度，延迟超标自动熔断。
 
@@ -121,6 +123,10 @@ amplitude_warn_ratio_threshold: 0.3 # 预警阈值 (Order_Distance 的倍数)
 velocity_check_window_sec: 1.0      # 趋势计算窗口
 velocity_tick_threshold: 3          # 触发趋势熔断的连续 Tick 数
 velocity_warn_tick_threshold: 2     # 预警趋势 tick 数
+volume_window_sec: 60               # 成交量基线窗口（秒）
+volume_min_samples: 10              # 触发统计所需最少样本数
+volume_warn_ratio: 2.5              # 预警倍数（当前/均值）
+volume_guard_ratio: 4.0             # 熔断倍数（当前/均值）
 
 # 恢复模式 (止损后)
 stop_loss_cooldown_sec: 600

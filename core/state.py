@@ -36,6 +36,8 @@ class State:
     last_cex_update_time: float = 0.0
     cex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
     dex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
+    cex_volume_window: list = field(default_factory=list)  # [(timestamp, notional), ...]
+    last_cex_volume_update_time: float = 0.0
     
     # Position
     position: float = 0.0
@@ -81,6 +83,41 @@ class State:
             # Clean up old data
             cutoff = now - window_sec
             self.cex_price_window = [(t, p) for t, p in self.cex_price_window if t > cutoff]
+
+    def update_cex_volume(self, notional: float, window_sec: int = 3600):
+        """Update CEX notional volume (1s kline) and maintain sliding window."""
+        with self._lock:
+            now = time.time()
+            self.last_cex_volume_update_time = now
+            self.cex_volume_window.append((now, notional))
+
+            cutoff = now - window_sec
+            self.cex_volume_window = [(t, v) for t, v in self.cex_volume_window if t > cutoff]
+
+    def get_cex_volume_ratio(self, window_sec: int, min_samples: int) -> tuple[float, float, float, int]:
+        """
+        Return volume ratio vs baseline: (ratio, current, average, sample_count).
+        Ratio is computed against the average of the baseline window excluding current.
+        """
+        with self._lock:
+            if not self.cex_volume_window:
+                return 0.0, 0.0, 0.0, 0
+
+            now = time.time()
+            cutoff = now - window_sec
+            samples = [v for t, v in self.cex_volume_window if t > cutoff]
+
+            if len(samples) < min_samples + 1:
+                return 0.0, 0.0, 0.0, len(samples)
+
+            current = samples[-1]
+            baseline = samples[:-1]
+            avg = sum(baseline) / len(baseline) if baseline else 0.0
+            if avg <= 0:
+                return 0.0, current, avg, len(baseline)
+
+            ratio = current / avg
+            return ratio, current, avg, len(baseline)
 
     def _get_window(self, source: str):
         if source == "cex":

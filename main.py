@@ -94,12 +94,12 @@ async def main(config_path: str):
     user_ws = UserWSClient(auth)
     
     # Initialize Binance WS Check
-    binance_ws = None
-    if config.binance_symbol:
-        logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
-        binance_ws = BinanceWSClient(config.binance_symbol)
-    else:
-        logger.info("Binance WS not configured, using StandX price for volatility.")
+        binance_ws = None
+        if config.binance_symbol:
+            logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
+            binance_ws = BinanceWSClient(config.binance_symbol, enable_kline=True)
+        else:
+            logger.info("Binance WS not configured, using StandX price for volatility.")
     
     # Initialize Telegram Bot
     telegram_bot = None
@@ -153,6 +153,9 @@ async def main(config_path: str):
                 # Note: Dont double confirm price here, handled in maker
             
             binance_ws.on_price(on_binance_price)
+            def on_binance_kline(notional: float):
+                maker.on_cex_volume_update(notional)
+            binance_ws.on_kline(on_binance_kline)
             # await binance_ws.run() # Handled by task list below
         
         # Register order callback to detect fills
