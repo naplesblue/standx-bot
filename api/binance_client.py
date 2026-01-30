@@ -88,7 +88,13 @@ class BinanceWSClient:
                                 payload = data
 
                             # Parse bookTicker: mid price
-                            if payload and "b" in payload and "a" in payload and "e" not in payload:
+                            # In combined stream mode, bookTicker has "e": "bookTicker" or stream name contains "bookTicker"
+                            is_book_ticker = (
+                                "bookTicker" in stream_name or 
+                                payload.get("e") == "bookTicker" or
+                                ("b" in payload and "a" in payload and "e" not in payload)
+                            )
+                            if is_book_ticker and "b" in payload and "a" in payload:
                                 bid = float(payload["b"])
                                 ask = float(payload["a"])
                                 mid_price = (bid + ask) / 2
