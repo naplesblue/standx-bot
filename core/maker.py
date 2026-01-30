@@ -237,7 +237,8 @@ class Maker:
                 return
 
         # Step -2: CEX Staleness Guard (If configured)
-        if self.config.binance_symbol:
+        # Only check after first CEX data arrives (last_cex_update_time > 0)
+        if self.config.binance_symbol and self.state.last_cex_update_time > 0:
             time_since_cex = now - self.state.last_cex_update_time
             if time_since_cex > self.config.binance_staleness_sec:
                 await self._activate_risk_guard(
