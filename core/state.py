@@ -367,7 +367,7 @@ class State:
             List of orders to cancel
         """
         with self._lock:
-            if self.last_price is None:
+            if self.last_dex_price is None:
                 return []
             
             to_cancel = []
@@ -382,19 +382,34 @@ class State:
                 else:
                     min_dist, max_dist = sell_bounds
                 
-                # Calculate distance in bps
-                distance_bps = abs(order.price - self.last_price) / self.last_price * 10000
+                # Calculate distance from DEX price
+                dex_distance_bps = abs(order.price - self.last_dex_price) / self.last_dex_price * 10000
                 
-                if distance_bps < min_dist:
+                # Calculate distance from CEX price (if available)
+                cex_distance_bps = None
+                if self.last_cex_price and self.last_cex_price > 0:
+                    cex_distance_bps = abs(order.price - self.last_cex_price) / self.last_cex_price * 10000
+                
+                # Use the SMALLER distance (more dangerous) for "too close" check
+                # This ensures we cancel if EITHER price is approaching the order
+                effective_distance = dex_distance_bps
+                distance_source = "DEX"
+                if cex_distance_bps is not None and cex_distance_bps < dex_distance_bps:
+                    effective_distance = cex_distance_bps
+                    distance_source = "CEX"
+                
+                if effective_distance < min_dist:
                     logger.warning(
-                        f"Order too close: {side} @ {order.price}, "
-                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps < {min_dist:.2f}bps"
+                        f"Order too close ({distance_source}): {side} @ {order.price}, "
+                        f"dex={self.last_dex_price:.2f}, cex={self.last_cex_price:.2f if self.last_cex_price else 0:.2f}, "
+                        f"distance={effective_distance:.2f}bps < {min_dist:.2f}bps"
                     )
                     to_cancel.append(order)
-                elif distance_bps > max_dist:
+                elif dex_distance_bps > max_dist:
+                    # For "too far" check, only use DEX price (order placement reference)
                     logger.warning(
-                        f"Order too far: {side} @ {order.price}, "
-                        f"last_price={self.last_price}, distance={distance_bps:.2f}bps > {max_dist:.2f}bps"
+                        f"Order too far (DEX): {side} @ {order.price}, "
+                        f"last_price={self.last_dex_price}, distance={dex_distance_bps:.2f}bps > {max_dist:.2f}bps"
                     )
                     to_cancel.append(order)
             
