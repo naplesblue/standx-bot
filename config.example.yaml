@@ -73,3 +73,11 @@ volume_window_sec: 60               # 成交量基线窗口（秒）
 volume_min_samples: 10              # 触发统计所需最少样本数
 volume_warn_ratio: 2.5              # 预警倍数（当前/均值）
 volume_guard_ratio: 4.0             # 熔断倍数（当前/均值）
+
+# 订单簿不平衡风控 (Orderbook Imbalance Guard)
+# 检测 CEX 订单簿买卖挂单量的不平衡，当单边堆积时撤销受威胁的挂单
+imbalance_guard_enabled: false      # 是否启用 (需要 binance_symbol)
+imbalance_depth_levels: 10          # 计算深度档位数 (1-20)
+imbalance_window_sec: 5             # 滑动窗口秒数
+imbalance_warn_threshold: 0.3       # 预警阈值 (触发单边挂单模式)
+imbalance_guard_threshold: 0.5      # 熔断阈值 (直接撤销受威胁方向订单)

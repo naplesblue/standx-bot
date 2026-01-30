@@ -360,6 +360,33 @@ class Maker:
             )
             return
 
+        # Step -1.4: Imbalance Guard (cancel vulnerable side order)
+        imbalance_dir = 0
+        if self.config.binance_symbol and self.config.imbalance_guard_enabled:
+            imbalance_dir = self.state.get_imbalance_signal(
+                window_sec=self.config.imbalance_window_sec,
+                threshold=self.config.imbalance_guard_threshold,
+            )
+            
+            if imbalance_dir != 0:
+                # Buy pressure (imbalance > 0) -> price going UP -> SELL order at risk (price approaching)
+                # Sell pressure (imbalance < 0) -> price going DOWN -> BUY order at risk (price approaching)
+                vulnerable_side = "sell" if imbalance_dir > 0 else "buy"
+                
+                if self.state.has_order(vulnerable_side):
+                    order = self.state.get_order(vulnerable_side)
+                    logger.warning(
+                        f"Imbalance Guard: {'买压' if imbalance_dir > 0 else '卖压'}过大 "
+                        f"(imbalance={self.state.last_imbalance:.2f}), 撤销 {vulnerable_side} 单"
+                    )
+                    try:
+                        await self.client.cancel_order(order.cl_ord_id)
+                        self.state.set_order(vulnerable_side, None)
+                        self.monitor.record_cancel()
+                    except Exception as e:
+                        logger.error(f"Imbalance Guard: Failed to cancel {vulnerable_side}: {e}")
+                    return
+
         # Step -1.2: Risk caution mode (single-side quoting)
         caution = False
         if self.config.volatility_threshold_bps > 0 and vol_bps > self.config.volatility_threshold_bps:
@@ -375,6 +402,16 @@ class Maker:
             and volume_samples >= self.config.volume_min_samples
         ):
             caution = True
+        
+        # Imbalance warn check (lower threshold than guard)
+        imbalance_warn_dir = 0
+        if self.config.binance_symbol and self.config.imbalance_guard_enabled:
+            imbalance_warn_dir = self.state.get_imbalance_signal(
+                window_sec=self.config.imbalance_window_sec,
+                threshold=self.config.imbalance_warn_threshold,
+            )
+            if imbalance_warn_dir != 0:
+                caution = True
 
         base_buy_bps = tight_bps
         base_sell_bps = tight_bps
@@ -382,13 +419,20 @@ class Maker:
 
         if caution:
             direction = warn_trend_dir
-            if direction == 0:
+            
+            # Prioritize imbalance signal if available
+            if imbalance_warn_dir != 0:
+                direction = imbalance_warn_dir
+            elif direction == 0:
                 direction = self.state.get_trend_direction(
                     self.config.velocity_check_window_sec,
                     1,
                     source=trend_source,
                 )
 
+            # Buy pressure (direction > 0) -> price going UP -> BUY order safe (price moves away), SELL order risky
+            # Sell pressure (direction < 0) -> price going DOWN -> SELL order safe (price moves away), BUY order risky
+            # Keep the SAFE side close, move the RISKY side far
             if direction >= 0:
                 near_side = "buy"
                 base_sell_bps = far_bps

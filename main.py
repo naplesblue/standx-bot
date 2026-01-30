@@ -97,7 +97,12 @@ async def main(config_path: str):
     binance_ws = None
     if config.binance_symbol:
         logger.info(f"Initializing Binance WS for {config.binance_symbol}...")
-        binance_ws = BinanceWSClient(config.binance_symbol, enable_kline=True)
+        binance_ws = BinanceWSClient(
+            config.binance_symbol,
+            enable_kline=True,
+            enable_depth=config.imbalance_guard_enabled,
+            depth_levels=config.imbalance_depth_levels,
+        )
     else:
         logger.info("Binance WS not configured, using StandX price for volatility.")
     
@@ -156,7 +161,13 @@ async def main(config_path: str):
             def on_binance_kline(notional: float):
                 maker.on_cex_volume_update(notional)
             binance_ws.on_kline(on_binance_kline)
-            # await binance_ws.run() # Handled by task list below
+            
+            # Register depth callback for imbalance guard
+            if config.imbalance_guard_enabled:
+                def on_binance_depth(bid_depth: float, ask_depth: float, imbalance: float):
+                    state.update_imbalance(bid_depth, ask_depth, config.imbalance_window_sec)
+                binance_ws.on_depth(on_binance_depth)
+                logger.info(f"Imbalance Guard enabled: depth_levels={config.imbalance_depth_levels}, window={config.imbalance_window_sec}s")
         
         # Register order callback to detect fills
         def on_order(data):

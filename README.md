@@ -11,22 +11,26 @@ StandX Maker Points 活动的双边挂单做市机器人。在 mark price 两侧
 *   **用途**：利用 CEX (Binance) 的数据来计算市场波动率，以及监控 **CEX/DEX 价差偏离**。
 *   **优势**：CEX 价格通常领先 DEX 几秒，在 StandX 价格剧烈波动前提前撤单防御。
 
-### 2. 三重熔断机制 (Advanced Risk Control)
+### 2. 六重熔断机制 (Advanced Risk Control)
 *   **价差熔断 (Spread Guard)**: 
     *   实时计算 `abs(Binance - StandX)` 偏离度。如果偏离超过阈值，暂停交易。
-*   **波幅熔断 (Realized Amplitude Guard)** [新增]:
+*   **波幅熔断 (Realized Amplitude Guard)**:
     *   监控 Binance 过去 10秒 的 **真实波幅** `(Max-Min)/Mid`。
     *   如果波幅超过设定的阈值 (如挂单距离的 50%)，意味着 CEX 剧烈震荡，立即暂停。
-*   **趋势熔断 (Price Velocity Guard)** [新增]:
+*   **趋势熔断 (Price Velocity Guard)**:
     *   监控价格变动速率。如果 1秒 内连续出现 3次 同方向跳变，视为单边行情启动，提前预警暂停。
-*   **成交量熔断 (Volume Guard)** [新增]:
+*   **成交量熔断 (Volume Guard)**:
     *   监控 1s Kline 成交量，相对基线放量触发预警或熔断。
+*   **订单簿不平衡熔断 (Imbalance Guard)** [新增]:
+    *   监控 CEX 订单簿前 N 档买卖挂单量，计算 `(Bid - Ask) / Total` 不平衡度。
+    *   当单边挂单堆积超过阈值时，撤销受威胁方向订单，避免被大单吃掉。
+    *   预警模式：进入单边挂单，仅保留顺势方向订单。
 *   **断线熔断 (Staleness Guard)**: 
     *   监测 CEX/DEX 数据新鲜度，延迟超标自动熔断。
 
 ### 3. 风控分级报价与单边防御 (Risk-Tier Quoting)
 *   **风险分级报价**: 低波动/无趋势时双边 8-10bps，预警时单边 9-10bps，另一侧 15-30bps 或暂时不挂。
-*   **单边行情防御**: 根据 CEX 方向/速度判断安全侧，只保留减仓方向或更安全一侧。
+*   **单边行情防御**: 根据 CEX 方向/速度/订单簿不平衡 判断安全侧，只保留减仓方向或更安全一侧。
 *   **冷却恢复**: 熔断触发后强制冷却，稳定 N 秒后再恢复挂单。
 
 ### 4. 效率监测 (Efficiency Monitor) [新增]
@@ -127,6 +131,13 @@ volume_window_sec: 60               # 成交量基线窗口（秒）
 volume_min_samples: 10              # 触发统计所需最少样本数
 volume_warn_ratio: 2.5              # 预警倍数（当前/均值）
 volume_guard_ratio: 4.0             # 熔断倍数（当前/均值）
+
+# ⚠️ 高级风控 - 订单簿不平衡 [新增]
+imbalance_guard_enabled: true       # 是否启用 (需要 binance_symbol)
+imbalance_depth_levels: 10          # 计算深度档位数 (1-20)
+imbalance_window_sec: 5             # 滑动窗口秒数
+imbalance_warn_threshold: 0.3       # 预警阈值 (触发单边挂单)
+imbalance_guard_threshold: 0.5      # 熔断阈值 (撤销受威胁方向订单)
 
 # 恢复模式 (止损后)
 stop_loss_cooldown_sec: 600

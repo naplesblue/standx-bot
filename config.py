@@ -62,6 +62,13 @@ class Config:
     telegram_bot_token: str = None
     telegram_chat_id: str = None
     
+    # Orderbook Imbalance Guard
+    imbalance_guard_enabled: bool = False
+    imbalance_depth_levels: int = 10
+    imbalance_window_sec: int = 5
+    imbalance_warn_threshold: float = 0.3
+    imbalance_guard_threshold: float = 0.5
+    
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
         return cls(
@@ -130,6 +137,11 @@ class Config:
             caution_other_side_enabled=data.get("caution_other_side_enabled", True),
             telegram_bot_token=data.get("telegram_bot_token"),
             telegram_chat_id=data.get("telegram_chat_id"),
+            imbalance_guard_enabled=data.get("imbalance_guard_enabled", False),
+            imbalance_depth_levels=data.get("imbalance_depth_levels", 10),
+            imbalance_window_sec=data.get("imbalance_window_sec", 5),
+            imbalance_warn_threshold=data.get("imbalance_warn_threshold", 0.3),
+            imbalance_guard_threshold=data.get("imbalance_guard_threshold", 0.5),
         )
 
 

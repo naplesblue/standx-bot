@@ -39,6 +39,11 @@ class State:
     cex_volume_window: list = field(default_factory=list)  # [(timestamp, notional), ...]
     last_cex_volume_update_time: float = 0.0
     
+    # Orderbook imbalance data
+    imbalance_window: list = field(default_factory=list)  # [(timestamp, imbalance), ...]
+    last_imbalance: float = 0.0
+    last_imbalance_update_time: float = 0.0
+    
     # Position
     position: float = 0.0
     entry_price: float = 0.0
@@ -118,6 +123,57 @@ class State:
 
             ratio = current / avg
             return ratio, current, avg, len(baseline)
+
+    def update_imbalance(self, bid_depth: float, ask_depth: float, window_sec: int = 10):
+        """Update orderbook imbalance data and maintain sliding window.
+        
+        Args:
+            bid_depth: Sum of bid quantities
+            ask_depth: Sum of ask quantities
+            window_sec: Time window to keep history
+        """
+        with self._lock:
+            now = time.time()
+            total = bid_depth + ask_depth
+            imbalance = (bid_depth - ask_depth) / total if total > 0 else 0.0
+            
+            self.last_imbalance = imbalance
+            self.last_imbalance_update_time = now
+            self.imbalance_window.append((now, imbalance))
+            
+            cutoff = now - window_sec
+            self.imbalance_window = [(t, v) for t, v in self.imbalance_window if t > cutoff]
+
+    def get_imbalance_signal(self, window_sec: int, threshold: float) -> int:
+        """Detect sustained imbalance direction in orderbook.
+        
+        Args:
+            window_sec: Time window to analyze
+            threshold: Minimum average imbalance magnitude to trigger signal
+            
+        Returns:
+            1: Sustained buy pressure (bid > ask), price likely to rise
+            -1: Sustained sell pressure (ask > bid), price likely to fall
+            0: No clear signal or insufficient data
+        """
+        with self._lock:
+            if not self.imbalance_window:
+                return 0
+            
+            now = time.time()
+            cutoff = now - window_sec
+            recent = [v for t, v in self.imbalance_window if t > cutoff]
+            
+            if len(recent) < 3:  # Need at least 3 samples
+                return 0
+            
+            avg_imbalance = sum(recent) / len(recent)
+            
+            if avg_imbalance > threshold:
+                return 1  # Buy pressure
+            elif avg_imbalance < -threshold:
+                return -1  # Sell pressure
+            return 0
 
     def _get_window(self, source: str):
         if source == "cex":
