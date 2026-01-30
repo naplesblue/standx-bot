@@ -399,9 +399,10 @@ class State:
                     distance_source = "CEX"
                 
                 if effective_distance < min_dist:
+                    cex_price_str = f"{self.last_cex_price:.2f}" if self.last_cex_price else "N/A"
                     logger.warning(
                         f"Order too close ({distance_source}): {side} @ {order.price}, "
-                        f"dex={self.last_dex_price:.2f}, cex={self.last_cex_price:.2f if self.last_cex_price else 0:.2f}, "
+                        f"dex={self.last_dex_price:.2f}, cex={cex_price_str}, "
                         f"distance={effective_distance:.2f}bps < {min_dist:.2f}bps"
                     )
                     to_cancel.append(order)
