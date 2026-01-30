@@ -71,6 +71,9 @@ class Maker:
         self._risk_guard_stable_start = None
         self._last_risk_warn_time = 0.0
         
+        # Pending close flag to prevent duplicate close attempts
+        self._pending_close = False
+        
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
         self._last_tick_time = 0.0
@@ -420,18 +423,22 @@ class Maker:
                 # Use dedicated logger for efficiency reports
                 logging.getLogger("standx.efficiency").info(self.monitor.get_report())
 
-        # Step -2: Check cool-down
+        # Step -2: Check cool-down (block new quoting, but allow exit)
         import time
         time_since_fill = time.time() - self.state.last_fill_time
-        if time_since_fill < self.config.fill_cooldown_sec:
+        cooldown_active = time_since_fill < self.config.fill_cooldown_sec
+        if cooldown_active:
            logger.debug(f"Cool-down active: {time_since_fill:.1f}s < {self.config.fill_cooldown_sec}s")
-           return
         
         # Step 1: Check if should reduce position (> 50% and profitable)
         # We do this BEFORE max position check to allow exiting even if full
         reduced = await self._check_and_reduce_position()
         if reduced:
             return  # Skip this tick after reducing
+
+        # If in cooldown and no position, skip new orders
+        if cooldown_active and self.state.position == 0:
+            return
         
         # Step 2: Check position limit
         if abs(self.state.position) >= self.config.max_position_btc:
@@ -439,7 +446,8 @@ class Maker:
                 f"Position too large: {self.state.position} >= {self.config.max_position_btc}, "
                 "pausing market making"
             )
-            return
+            if self.state.position == 0:
+                return
         
         # Step 2: Calculate skew and targets
         skew_bps = self._get_skew_bps()
@@ -801,6 +809,11 @@ class Maker:
                 logger.info(f"Close order placed: {cl_ord_id}")
                 self.monitor.record_order()
                 self._write_reduce_log("CLOSE", -reduce_qty if reduce_side == "sell" else reduce_qty, f"aggressive_exit_upnl_{upnl:.2f}")
+                
+                # Immediately sync local state to prevent duplicate close attempts
+                self.state.update_position(0, 0.0)
+                self.state.clear_all_orders()
+                
                 send_notify(
                     "仓位止盈 (Market)",
                     f"{self.config.symbol} 市价止盈 {reduce_qty:.4f}，uPNL=${upnl:.2f}",
@@ -862,6 +875,10 @@ class Maker:
                             cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
                         )
                         self.monitor.record_order()
+                        
+                        # Immediately sync local state to prevent duplicate close attempts
+                        self.state.update_position(0, 0.0)
+                        
                     except Exception as e:
                         logger.error(f"StopLoss: Failed to close position: {e}")
                 
@@ -875,11 +892,51 @@ class Maker:
                 logger.critical(f"Stop loss executed. Entering recovery mode (wait {self.config.stop_loss_cooldown_sec}s)...")
                 import time
                 self._stop_loss_active = True
+                self._pending_close = False  # Reset pending close flag
                 self._next_recovery_check = time.time() + self.config.stop_loss_cooldown_sec
                 
                 return True
                 
         except Exception as e:
             logger.error(f"Error checking stop loss: {e}")
+        
+        return False
+
+    def check_stop_loss_from_ws(self, qty: float, entry_price: float, mark_price: float) -> bool:
+        """
+        Check stop loss using real-time WS data (no HTTP latency).
+        Called from on_position WebSocket callback.
+        
+        Args:
+            qty: Current position quantity (positive=long, negative=short)
+            entry_price: Position entry price
+            mark_price: Current mark/last price
+            
+        Returns:
+            True if stop loss should be triggered and task scheduled
+        """
+        if self.config.stop_loss_usd <= 0:
+            return False
+        
+        if qty == 0 or entry_price <= 0 or mark_price <= 0:
+            return False
+        
+        # Skip if already in recovery mode or pending close
+        if self._stop_loss_active or self._pending_close:
+            return False
+        
+        # Calculate uPNL locally
+        if qty > 0:  # Long position
+            upnl = (mark_price - entry_price) * qty
+        else:  # Short position
+            upnl = (entry_price - mark_price) * abs(qty)
+        
+        # Check if stop loss triggered
+        if upnl < -self.config.stop_loss_usd:
+            logger.critical(
+                f"WS STOP LOSS CHECK: uPNL ${upnl:.2f} < -${self.config.stop_loss_usd:.2f} (local calc)"
+            )
+            self._pending_close = True  # Set flag to prevent duplicate
+            return True
         
         return False

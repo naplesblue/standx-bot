@@ -227,6 +227,21 @@ async def main(config_path: str):
             if symbol == config.symbol:
                 logger.info(f"Position update: {symbol} qty={qty} @ {entry_price}")
                 
+                # === Real-time Stop Loss Check (reduce HTTP latency) ===
+                # Use mark_price from WS if available, fallback to state.last_dex_price
+                mark_price = pos_data.get("mark_price")
+                if mark_price is not None:
+                    mark_price = float(mark_price)
+                else:
+                    mark_price = state.last_dex_price or 0.0
+                
+                if mark_price > 0 and entry_price > 0 and qty != 0:
+                    should_stop = maker.check_stop_loss_from_ws(qty, entry_price, mark_price)
+                    if should_stop:
+                        logger.critical(f"WS triggered stop loss! Scheduling immediate _check_stop_loss()")
+                        # Schedule stop loss execution as async task
+                        asyncio.create_task(maker._check_stop_loss())
+                
                 # Check for position change to detect hidden fills
                 previous_qty = state.position
                 if abs(qty - previous_qty) > 1e-6:
@@ -242,6 +257,7 @@ async def main(config_path: str):
                 state.update_position(qty, entry_price)
         
         user_ws.on_position(on_position)
+
         
         # Initialize state from exchange
         await maker.initialize()
