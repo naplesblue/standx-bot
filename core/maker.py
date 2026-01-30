@@ -187,6 +187,11 @@ class Maker:
         if self.state.last_dex_price is None:
             logger.debug("Waiting for DEX price data...")
             return
+        
+        # Wait for CEX price data (if configured)
+        if self.config.binance_symbol and self.state.last_cex_price is None:
+            logger.debug("Waiting for CEX (Binance) price data...")
+            return
 
         # Step -3: Check Recovery Mode
         if self._stop_loss_active:
