@@ -79,22 +79,20 @@ class BinanceWSClient:
                             data = json.loads(message)
                             self._msg_count += 1
                             
-                            # Handle combined stream format
+                            # Handle combined stream format or flat format
                             if "stream" in data:
                                 stream_name = data.get("stream", "")
                                 payload = data.get("data", {})
                             else:
+                                # Flat format: message is the payload itself
                                 stream_name = ""
                                 payload = data
 
+                            # Determine message type by "e" field
+                            event_type = payload.get("e", "")
+
                             # Parse bookTicker: mid price
-                            # In combined stream mode, bookTicker has "e": "bookTicker" or stream name contains "bookTicker"
-                            is_book_ticker = (
-                                "bookTicker" in stream_name or 
-                                payload.get("e") == "bookTicker" or
-                                ("b" in payload and "a" in payload and "e" not in payload)
-                            )
-                            if is_book_ticker and "b" in payload and "a" in payload:
+                            if event_type == "bookTicker" and "b" in payload and "a" in payload:
                                 bid = float(payload["b"])
                                 ask = float(payload["a"])
                                 mid_price = (bid + ask) / 2
@@ -106,7 +104,7 @@ class BinanceWSClient:
                                         logger.error(f"Binance price callback error: {e}")
 
                             # Parse kline: closed 1s volume
-                            if payload and payload.get("e") == "kline":
+                            elif event_type == "kline":
                                 kline = payload.get("k", {})
                                 if kline.get("x"):
                                     quote_vol = float(kline.get("q", 0))
@@ -116,10 +114,10 @@ class BinanceWSClient:
                                         except Exception as e:
                                             logger.error(f"Binance kline callback error: {e}")
 
-                            # Parse depth20: orderbook imbalance
-                            if payload and "bids" in payload and "asks" in payload:
-                                bids = payload.get("bids", [])
-                                asks = payload.get("asks", [])
+                            # Parse depth20/depthUpdate: orderbook imbalance
+                            elif event_type == "depthUpdate" and "b" in payload and "a" in payload:
+                                bids = payload.get("b", [])
+                                asks = payload.get("a", [])
                                 
                                 # Sum quantities up to depth_levels
                                 bid_depth = sum(float(qty) for _, qty in bids[:self.depth_levels])

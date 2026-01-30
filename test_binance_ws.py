@@ -14,12 +14,14 @@ async def main():
         print("Connected! Waiting for messages...\n")
         
         count = 0
-        while count < 20:  # Print first 20 messages
+        while count < 10:  # Print first 10 messages
             message = await ws.recv()
+            print(f"RAW[{count}]: {message[:200]}...")  # Print first 200 chars
+            
             data = json.loads(message)
             
             stream = data.get("stream", "unknown")
-            payload = data.get("data", {})
+            payload = data.get("data", data)  # If no "data" key, use data itself
             
             if "bookTicker" in stream:
                 bid = float(payload.get("b", 0))
