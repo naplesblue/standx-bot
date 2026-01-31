@@ -249,6 +249,10 @@ class UserWSClient:
                 
                 # Dispatch to callbacks based on channel
                 channel = data.get("channel")
+                
+                # Debug: log all received messages to diagnose missing callbacks
+                logger.debug(f"User stream message: channel={channel}, data={str(data)[:200]}")
+                
                 if channel in self._callbacks:
                     for callback in self._callbacks[channel]:
                         try:
