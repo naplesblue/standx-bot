@@ -200,7 +200,12 @@ class Maker:
             if now < self._next_recovery_check:
                 # Still in cooldown/wait period
                 logger.debug(f"Recovery mode active. Waiting... ({self._next_recovery_check - now:.0f}s left)")
-                await asyncio.sleep(5) # Sleep to avoid busy loop logs
+                # Use wait_for with pending_check to allow fast exit on shutdown
+                try:
+                    await asyncio.wait_for(self._pending_check.wait(), timeout=5.0)
+                    self._pending_check.clear()
+                except asyncio.TimeoutError:
+                    pass
                 return
             
             # Check stability
