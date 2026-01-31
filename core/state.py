@@ -382,26 +382,43 @@ class State:
                 else:
                     min_dist, max_dist = sell_bounds
                 
-                # Calculate distance from DEX price
+                # Calculate distance from DEX price (always used)
                 dex_distance_bps = abs(order.price - self.last_dex_price) / self.last_dex_price * 10000
                 
-                # Calculate distance from CEX price (if available)
-                cex_distance_bps = None
+                # Calculate CEX distance only in DANGEROUS direction
+                # - Buy order: dangerous when CEX falls TOWARD order (CEX approaching from above)
+                # - Sell order: dangerous when CEX rises TOWARD order (CEX approaching from below)
+                cex_danger_distance_bps = None
                 if self.last_cex_price and self.last_cex_price > 0:
-                    cex_distance_bps = abs(order.price - self.last_cex_price) / self.last_cex_price * 10000
+                    if side == "buy":
+                        # Buy order @ 84122, CEX @ 84150 -> safe (CEX above order)
+                        # Buy order @ 84122, CEX @ 84130 -> dangerous (CEX close to order from above)
+                        # Only consider distance if CEX is above order (and close to hitting it)
+                        if self.last_cex_price > order.price:
+                            cex_danger_distance_bps = (self.last_cex_price - order.price) / self.last_cex_price * 10000
+                        else:
+                            # CEX already below order price -> very dangerous, distance = 0
+                            cex_danger_distance_bps = 0
+                    else:  # sell
+                        # Sell order @ 84200, CEX @ 84150 -> safe (CEX below order)
+                        # Sell order @ 84200, CEX @ 84190 -> dangerous (CEX close to order from below)
+                        if self.last_cex_price < order.price:
+                            cex_danger_distance_bps = (order.price - self.last_cex_price) / self.last_cex_price * 10000
+                        else:
+                            # CEX already above order price -> very dangerous, distance = 0
+                            cex_danger_distance_bps = 0
                 
                 # Use the SMALLER distance (more dangerous) for "too close" check
-                # This ensures we cancel if EITHER price is approaching the order
                 effective_distance = dex_distance_bps
                 distance_source = "DEX"
-                if cex_distance_bps is not None and cex_distance_bps < dex_distance_bps:
-                    effective_distance = cex_distance_bps
+                if cex_danger_distance_bps is not None and cex_danger_distance_bps < dex_distance_bps:
+                    effective_distance = cex_danger_distance_bps
                     distance_source = "CEX"
                 
                 if effective_distance < min_dist:
                     cex_price_str = f"{self.last_cex_price:.2f}" if self.last_cex_price else "N/A"
                     logger.warning(
-                        f"Order too close ({distance_source}): {side} @ {order.price}, "
+                        f"Order too close ({distance_source}): {side} @ {order.price:.2f}, "
                         f"dex={self.last_dex_price:.2f}, cex={cex_price_str}, "
                         f"distance={effective_distance:.2f}bps < {min_dist:.2f}bps"
                     )
