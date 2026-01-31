@@ -182,26 +182,13 @@ async def main(config_path: str):
                 # Record fill immediately upon receipt
                 if status.lower() in ("filled", "partially_filled"):
                     state.record_fill()
-                    # Only record fill in monitor if it's a new fill event
-                    # Extract PnL/Fee if available (not always present in order update, check API docs/response)
-                    realized_pnl = float(order_data.get("realized_pnl", 0))
-                    fee = float(order_data.get("cum_fee", 0)) # or fee field
                     
-                    # Note: WS might send multiple updates for same partial fill state.
-                    # Ideally we should diff cum_qty, but for now we rely on API to send "trade" events separate from "order" events for precise pnl.
-                    # Assuming order update contains cumulative PnL, we need to be careful not to double count.
-                    # Actually, 'realized_pnl' in order update is usually cumulative for that order.
-                    # But monitor is stateless between fills.
-                    # Let's just track it nicely. If we get repeated updates, we might over-count if we just add.
-                    # BUT, usually 'filled' is final. 'partially_filled' keeps coming.
-                    # Better approach: Just record the fill count here. PnL tracking might be better in 'on_trade' if available.
-                    # For now, we will add 0 pnl here and rely on position update or separate trade stream if needed.
-                    # Wait, user asked for realized PnL.
-                    # Let's try to get it from the message.
-                    pnl = float(order_data.get("realized_pnl", 0))
+                    # StandX order message uses 'pnl' and 'fee' fields (not 'realized_pnl' / 'cum_fee')
+                    pnl = float(order_data.get("pnl", 0) or 0)
+                    fee = float(order_data.get("fee", 0) or 0)
                     
-                    maker.monitor.record_fill(pnl=pnl)
-                    logger.info(f"Fill detected ({status}) and recorded: {cl_ord_id}, PnL={pnl}")
+                    maker.monitor.record_fill(pnl=pnl, fee=fee)
+                    logger.info(f"Fill detected ({status}): {cl_ord_id}, PnL=${pnl:.4f}, Fee=${fee:.4f}")
 
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)

@@ -26,15 +26,11 @@ class Order:
     symbol: str
     realized_pnl: float = 0.0
     updated_at: str = ""
-    realized_pnl: float = 0.0
-    updated_at: str = ""
 
 
 @dataclass 
 class Position:
     """Represents a position."""
-    qty: float
-    entry_price: float
     qty: float
     entry_price: float
     upnl: float
