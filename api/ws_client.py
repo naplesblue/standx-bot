@@ -200,13 +200,14 @@ class UserWSClient:
         logger.info("User stream authenticated")
         
         # Subscribe to order and position channels
-        # StandX API requires session_id and request_id in subscribe messages
+        # StandX API uses RPC-style messages: method + params
         import uuid
         
         order_sub = {
             "session_id": self._session_id,
             "request_id": str(uuid.uuid4()),
-            "subscribe": {"channel": "order"}
+            "method": "subscribe",
+            "params": json.dumps({"channel": "order"})
         }
         await self._ws.send(json.dumps(order_sub))
         logger.info("Subscribed to order channel")
@@ -214,7 +215,8 @@ class UserWSClient:
         position_sub = {
             "session_id": self._session_id,
             "request_id": str(uuid.uuid4()),
-            "subscribe": {"channel": "position"}
+            "method": "subscribe",
+            "params": json.dumps({"channel": "position"})
         }
         await self._ws.send(json.dumps(position_sub))
         logger.info("Subscribed to position channel")
