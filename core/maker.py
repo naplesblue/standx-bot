@@ -530,7 +530,9 @@ class Maker:
             )
         
         # Step 3: Check and cancel orders
-        orders_to_cancel = self.state.get_orders_to_cancel(buy_bounds, sell_bounds)
+        cancel_result = self.state.get_orders_to_cancel(buy_bounds, sell_bounds)
+        orders_to_cancel = cancel_result['orders']
+        cex_triggered_sides = cancel_result['cex_triggered_sides']
 
         for side in ("buy", "sell"):
             if side not in allowed_sides and self.state.has_order(side):
@@ -555,6 +557,15 @@ class Maker:
                         priority="high"
                     )
             
+            # If CEX triggered, set cooldown to prevent immediate re-placing at same price
+            if cex_triggered_sides:
+                cooldown_sec = 5.0  # Wait 5s for CEX price to stabilize
+                for side in cex_triggered_sides:
+                    if not hasattr(self, '_cex_cancel_cooldown'):
+                        self._cex_cancel_cooldown = {}
+                    self._cex_cancel_cooldown[side] = time.time() + cooldown_sec
+                    logger.warning(f"CEX cancel cooldown: {side} blocked for {cooldown_sec}s")
+            
             # Don't place new orders this tick
             return
         
@@ -562,7 +573,14 @@ class Maker:
         # We already handled critical volatility at the start of _tick
         pass
         
-        # Step 5: Place missing orders
+        # Step 5: Place missing orders (respect CEX cooldown)
+        if hasattr(self, '_cex_cancel_cooldown'):
+            now = time.time()
+            cooldown_active = {side for side, until in self._cex_cancel_cooldown.items() if now < until}
+            if cooldown_active:
+                allowed_sides = allowed_sides - cooldown_active
+                logger.debug(f"CEX cooldown active for: {cooldown_active}")
+        
         exit_qty = abs(self.state.position) if self.state.position != 0 else None
         await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)
     

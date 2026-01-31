@@ -355,7 +355,7 @@ class State:
             self.open_orders = {"buy": None, "sell": None}
             logger.info("All orders cleared")
     
-    def get_orders_to_cancel(self, buy_bounds: tuple, sell_bounds: tuple) -> list[OpenOrder]:
+    def get_orders_to_cancel(self, buy_bounds: tuple, sell_bounds: tuple) -> dict:
         """
         Get orders that need to be cancelled due to price distance.
         
@@ -364,13 +364,16 @@ class State:
             sell_bounds: (min_dist, max_dist) for sell orders
             
         Returns:
-            List of orders to cancel
+            dict with:
+              - 'orders': List of orders to cancel
+              - 'cex_triggered_sides': List of sides cancelled due to CEX danger
         """
         with self._lock:
             if self.last_dex_price is None:
-                return []
+                return {'orders': [], 'cex_triggered_sides': []}
             
             to_cancel = []
+            cex_triggered_sides = []
             
             for side, order in self.open_orders.items():
                 if order is None:
@@ -421,6 +424,7 @@ class State:
                 elif cex_in_danger:
                     # CEX triggered danger already logged above
                     to_cancel.append(order)
+                    cex_triggered_sides.append(side)
                 elif dex_distance_bps > max_dist:
                     logger.warning(
                         f"Order too far (DEX): {side} @ {order.price:.2f}, "
@@ -428,5 +432,6 @@ class State:
                     )
                     to_cancel.append(order)
             
-            return to_cancel
+            return {'orders': to_cancel, 'cex_triggered_sides': cex_triggered_sides}
+
 
