@@ -203,13 +203,13 @@ class UserWSClient:
         
         logger.info(f"Auth response: {data}")
         
-        # Market Stream returns: { "seq": 1, "channel": "auth", "data": { "code": 200, "msg": "success" } }
+        # Market Stream returns: { "seq": 1, "channel": "auth", "data": { "code": 0, "message": "success" } }
+        # code: 0 or 200 both indicate success
         if data.get("channel") == "auth":
             auth_data = data.get("data", {})
-            if auth_data.get("code") != 200:
+            code = auth_data.get("code")
+            if code not in (0, 200):
                 raise RuntimeError(f"User stream auth failed: {data}")
-        elif data.get("code") != 0 and data.get("code") is not None:
-            raise RuntimeError(f"User stream auth failed: {data}")
         
         logger.info("User stream authenticated and subscribed to order/position")
     
