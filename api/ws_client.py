@@ -90,7 +90,11 @@ class MarketWSClient:
                     continue
             
             try:
-                message = await self._ws.recv()
+                # Use timeout to allow periodic shutdown check
+                try:
+                    message = await asyncio.wait_for(self._ws.recv(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue  # Check _running and retry
                 data = json.loads(message)
                 self._msg_count += 1
                 
@@ -124,7 +128,11 @@ class MarketWSClient:
                 logger.error(f"Error in market stream: {e}")
                 self._ws = None
                 if self._running:
-                    await asyncio.sleep(1)
+                    # Short sleep with shutdown check
+                    for _ in range(2):
+                        if not self._running:
+                            break
+                        await asyncio.sleep(0.5)
                     continue
     
     async def close(self):
@@ -239,7 +247,11 @@ class UserWSClient:
                     continue
             
             try:
-                message = await self._ws.recv()
+                # Use timeout to allow periodic shutdown check
+                try:
+                    message = await asyncio.wait_for(self._ws.recv(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue  # Check _running and retry
                 data = json.loads(message)
                 
                 # Handle server ping (JSON-based)
@@ -269,7 +281,11 @@ class UserWSClient:
                 logger.error(f"Error in user stream: {e}")
                 self._ws = None
                 if self._running:
-                    await asyncio.sleep(1)
+                    # Short sleep with shutdown check
+                    for _ in range(2):
+                        if not self._running:
+                            break
+                        await asyncio.sleep(0.5)
                     continue
     
     async def close(self):

@@ -76,7 +76,11 @@ class BinanceWSClient:
                     
                     while self._running:
                         try:
-                            message = await ws.recv()
+                            # Use timeout to allow periodic shutdown check
+                            try:
+                                message = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                continue  # Check _running and retry
                             data = json.loads(message)
                             self._msg_count += 1
                             
@@ -152,7 +156,11 @@ class BinanceWSClient:
                 
             if self._running:
                 logger.info("Reconnecting Binance WS in 5s...")
-                await asyncio.sleep(5)
+                # Use short sleep intervals to allow fast shutdown
+                for _ in range(10):  # 10 x 0.5s = 5s total
+                    if not self._running:
+                        break
+                    await asyncio.sleep(0.5)
     
     async def close(self):
         """Stop the client."""
