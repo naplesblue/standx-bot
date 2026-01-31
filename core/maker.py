@@ -996,10 +996,10 @@ class Maker:
                 except Exception as e:
                     logger.error(f"StopLoss: Failed to cancel orders: {e}")
                 
-                # 2. Close position
-                qty = abs(positions[0].qty)
+                # 2. Close position (use state.position which is always available)
+                qty = abs(self.state.position)
                 if qty > 0:
-                    side = "sell" if positions[0].qty > 0 else "buy"
+                    side = "sell" if self.state.position > 0 else "buy"
                     logger.critical(f"StopLoss: Closing position {qty} {side}")
                     
                     try:
