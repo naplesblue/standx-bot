@@ -183,12 +183,20 @@ async def main(config_path: str):
                 if status.lower() in ("filled", "partially_filled"):
                     state.record_fill()
                     
-                    # StandX order message uses 'pnl' and 'fee' fields (not 'realized_pnl' / 'cum_fee')
+                    # Extract key fill data from StandX order message
                     pnl = float(order_data.get("pnl", 0) or 0)
                     fee = float(order_data.get("fee", 0) or 0)
+                    fill_price = order_data.get("fill_avg_price", "0")
+                    fill_qty = order_data.get("fill_qty", "0")
+                    order_qty = order_data.get("qty", "0")
+                    order_price = order_data.get("price", "0")
                     
                     maker.monitor.record_fill(pnl=pnl, fee=fee)
-                    logger.info(f"Fill detected ({status}): {cl_ord_id}, PnL=${pnl:.4f}, Fee=${fee:.4f}")
+                    logger.info(
+                        f"Fill detected ({status}): {cl_ord_id}, "
+                        f"side={side}, qty={fill_qty}/{order_qty} @ {fill_price}, "
+                        f"PnL=${pnl:.4f}, Fee=${fee:.4f}"
+                    )
 
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)
