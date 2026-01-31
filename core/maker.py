@@ -790,6 +790,17 @@ class Maker:
         
         logger.info(f"Placing {side} order: {qty_str} @ {price_str} (cl_ord_id: {cl_ord_id})")
         
+        # Log risk parameters at order placement for comparison with fill time
+        cex_price = self.state.last_cex_price or 0
+        dex_price = self.state.last_dex_price or 0
+        spread_bps = self.state.get_spread_bps() if hasattr(self.state, 'get_spread_bps') else 0
+        vol_bps = self.state.get_volatility_bps() if hasattr(self.state, 'get_volatility_bps') else 0
+        imbalance = getattr(self.state, 'last_imbalance', 0)
+        logger.debug(
+            f"ORDER_CONTEXT: {cl_ord_id} | CEX={cex_price:.2f} DEX={dex_price:.2f} | "
+            f"Spread={spread_bps:.1f}bps Vol={vol_bps:.1f}bps Imb={imbalance:.2f}"
+        )
+        
         try:
             response = await self.client.new_order(
                 symbol=self.config.symbol,

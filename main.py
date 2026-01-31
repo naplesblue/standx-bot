@@ -191,11 +191,23 @@ async def main(config_path: str):
                     order_qty = order_data.get("qty", "0")
                     order_price = order_data.get("price", "0")
                     
+                    # Capture risk parameters at fill time for diagnosis
+                    cex_price = state.last_cex_price or 0
+                    dex_price = state.last_dex_price or 0
+                    spread_bps = state.get_spread_bps() if hasattr(state, 'get_spread_bps') else 0
+                    vol_bps = state.get_volatility_bps() if hasattr(state, 'get_volatility_bps') else 0
+                    imbalance = getattr(state, 'last_imbalance', 0)
+                    position = state.position
+                    
                     maker.monitor.record_fill(pnl=pnl, fee=fee)
-                    logger.info(
-                        f"Fill detected ({status}): {cl_ord_id}, "
-                        f"side={side}, qty={fill_qty}/{order_qty} @ {fill_price}, "
-                        f"PnL=${pnl:.4f}, Fee=${fee:.4f}"
+                    
+                    # Detailed fill log with risk context
+                    logger.warning(
+                        f"FILL: {cl_ord_id} | {side} {fill_qty}/{order_qty} @ {fill_price} | "
+                        f"PnL=${pnl:.4f} Fee=${fee:.4f} | "
+                        f"CEX={cex_price:.2f} DEX={dex_price:.2f} | "
+                        f"Spread={spread_bps:.1f}bps Vol={vol_bps:.1f}bps Imb={imbalance:.2f} | "
+                        f"Pos={position}"
                     )
 
                 if side in ("buy", "sell"):
