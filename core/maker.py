@@ -176,7 +176,6 @@ class Maker:
     
     async def _tick(self):
         """Single iteration of the maker logic."""
-        import time
         now = time.time()
         if self._last_tick_time > 0:
             dt = now - self._last_tick_time
@@ -196,7 +195,6 @@ class Maker:
 
         # Step -3: Check Recovery Mode
         if self._stop_loss_active:
-            import time
             now = time.time()
             
             if now < self._next_recovery_check:
@@ -478,7 +476,6 @@ class Maker:
                 logging.getLogger("standx.efficiency").info(self.monitor.get_report())
 
         # Step -2: Check cool-down (block new quoting, but allow exit)
-        import time
         time_since_fill = time.time() - self.state.last_fill_time
         cooldown_active = time_since_fill < self.config.fill_cooldown_sec
         if cooldown_active:
@@ -668,7 +665,6 @@ class Maker:
 
     async def _activate_risk_guard(self, reason: str):
         """Activate risk guard, cancel orders, and start cooldown timer."""
-        import time
         now = time.time()
 
         if not self._risk_guard_active:
@@ -991,7 +987,6 @@ class Maker:
                 )
                 
                 logger.critical(f"Stop loss executed. Entering recovery mode (wait {self.config.stop_loss_cooldown_sec}s)...")
-                import time
                 self._stop_loss_active = True
                 self._pending_close = False  # Reset pending close flag
                 self._next_recovery_check = time.time() + self.config.stop_loss_cooldown_sec
