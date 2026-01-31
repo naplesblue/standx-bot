@@ -290,7 +290,7 @@ async def main(config_path: str):
                         equity = float(data.get("equity", 0))
                         balance = float(data.get("balance", 0))
                     except Exception as e:
-                        logger.warning(f"Sync: Failed to query balance: {e}")
+                        logger.warning(f"Sync: Failed to query balance: {type(e).__name__}: {e}")
                         equity = 0.0
                         balance = 0.0
 

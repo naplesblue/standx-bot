@@ -1017,7 +1017,7 @@ class Maker:
                 return True
                 
         except Exception as e:
-            logger.error(f"Error checking stop loss: {e}")
+            logger.error(f"Error checking stop loss: {type(e).__name__}: {e}")
         
         return False
 
