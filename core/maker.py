@@ -349,9 +349,12 @@ class Maker:
             )
             return
 
-        if guard_trend_dir != 0:
+        # Velocity Guard: require BOTH trend direction AND sufficient amplitude
+        # This prevents false positives from tiny price jitter
+        velocity_min_amp_bps = tight_bps * 0.5  # At least 50% of tight distance
+        if guard_trend_dir != 0 and amp_bps >= velocity_min_amp_bps:
             await self._activate_risk_guard(
-                f"Velocity Guard: trend detected ({self.config.velocity_tick_threshold} ticks in {self.config.velocity_check_window_sec}s)"
+                f"Velocity Guard: trend detected ({self.config.velocity_tick_threshold} ticks in {self.config.velocity_check_window_sec}s, amp={amp_bps:.1f}bps)"
             )
             return
 
@@ -821,12 +824,28 @@ class Maker:
         current_pos = abs(self.state.position)
         if current_pos == 0:
             return False
-        # Check uPNL
-        try:
-            positions = await self.client.query_positions(self.config.symbol)
-            if not positions:
+        
+        # Rate limit: max once every 5 seconds
+        now = time.time()
+        if hasattr(self, '_last_profit_take_check_time'):
+            if now - self._last_profit_take_check_time < 5.0:
                 return False
-            upnl = positions[0].upnl
+        self._last_profit_take_check_time = now
+        
+        # Check uPNL - try WS data first
+        try:
+            upnl = None
+            if self.state.entry_price > 0:
+                mark_price = self.state.last_dex_price or 0
+                if mark_price > 0:
+                    upnl = (mark_price - self.state.entry_price) * self.state.position
+            
+            # Fallback to HTTP if WS data unavailable
+            if upnl is None:
+                positions = await self.client.query_positions(self.config.symbol)
+                if not positions:
+                    return False
+                upnl = positions[0].upnl
             
             # CONDITION: Profit > Min Threshold
             # We treat this as a "Panic Exit" or "Opportunity Exit" to clear inventory.
@@ -898,11 +917,30 @@ class Maker:
         """
         if self.config.stop_loss_usd <= 0:
             return False
-        try:
-            positions = await self.client.query_positions(self.config.symbol)
-            if not positions:
+        
+        # Rate limit: max once every 2 seconds to avoid 429
+        now = time.time()
+        if hasattr(self, '_last_stop_loss_check_time'):
+            if now - self._last_stop_loss_check_time < 2.0:
                 return False
-            upnl = positions[0].upnl
+        self._last_stop_loss_check_time = now
+        
+        try:
+            # Try to calculate uPNL from WS data first (no HTTP needed)
+            upnl = None
+            if self.state.position != 0 and self.state.entry_price > 0:
+                mark_price = self.state.last_dex_price or 0
+                if mark_price > 0:
+                    # uPNL = (mark - entry) * qty
+                    upnl = (mark_price - self.state.entry_price) * self.state.position
+                    logger.debug(f"StopLoss check (WS): uPNL=${upnl:.2f}")
+            
+            # Fallback to HTTP if WS data unavailable or no position
+            if upnl is None:
+                positions = await self.client.query_positions(self.config.symbol)
+                if not positions:
+                    return False
+                upnl = positions[0].upnl
             
             # Check critical stop loss
             if upnl < -self.config.stop_loss_usd:
