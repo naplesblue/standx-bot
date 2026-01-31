@@ -200,10 +200,23 @@ class UserWSClient:
         logger.info("User stream authenticated")
         
         # Subscribe to order and position channels
-        await self._ws.send(json.dumps({"subscribe": {"channel": "order"}}))
+        # StandX API requires session_id and request_id in subscribe messages
+        import uuid
+        
+        order_sub = {
+            "session_id": self._session_id,
+            "request_id": str(uuid.uuid4()),
+            "subscribe": {"channel": "order"}
+        }
+        await self._ws.send(json.dumps(order_sub))
         logger.info("Subscribed to order channel")
         
-        await self._ws.send(json.dumps({"subscribe": {"channel": "position"}}))
+        position_sub = {
+            "session_id": self._session_id,
+            "request_id": str(uuid.uuid4()),
+            "subscribe": {"channel": "position"}
+        }
+        await self._ws.send(json.dumps(position_sub))
         logger.info("Subscribed to position channel")
     
     async def _reconnect(self):
