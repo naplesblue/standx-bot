@@ -27,6 +27,7 @@ class BinanceWSClient:
         self._kline_callbacks: list[Callable[[float], None]] = []
         self._depth_callbacks: list[Callable[[float, float, float], None]] = []
         self._msg_count = 0
+        self._bookticker_count = 0  # Track bookTicker messages specifically
         self._last_log_time = 0
     
     def on_price(self, callback: Callable[[float], None]):
@@ -96,6 +97,7 @@ class BinanceWSClient:
                                 bid = float(payload["b"])
                                 ask = float(payload["a"])
                                 mid_price = (bid + ask) / 2
+                                self._bookticker_count += 1
                                 
                                 for cb in self._callbacks:
                                     try:
@@ -135,7 +137,7 @@ class BinanceWSClient:
                             # Heartbeat log
                             now = time.time()
                             if now - self._last_log_time >= 30:
-                                logger.info(f"[Heartbeat] Binance WS alive, {self._msg_count} msgs")
+                                logger.info(f"[Heartbeat] Binance WS alive, {self._msg_count} msgs, {self._bookticker_count} bookTickers")
                                 self._last_log_time = now
                                 
                         except websockets.ConnectionClosed:
