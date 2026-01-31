@@ -75,6 +75,9 @@ class Maker:
         # Pending close flag to prevent duplicate close attempts
         self._pending_close = False
         
+        # Imbalance Guard cancel cooldown (prevent immediate re-order after cancel)
+        self._imbalance_cancel_cooldown = {}  # {side: until_timestamp}
+        
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
         self._last_tick_time = 0.0
@@ -400,6 +403,10 @@ class Maker:
                         await self.client.cancel_order(order.cl_ord_id)
                         self.state.set_order(vulnerable_side, None)
                         self.monitor.record_cancel()
+                        # Add cooldown to prevent immediate re-order on same side
+                        cooldown_sec = 3.0
+                        self._imbalance_cancel_cooldown[vulnerable_side] = time.time() + cooldown_sec
+                        logger.info(f"Imbalance Guard: {vulnerable_side} cooldown for {cooldown_sec}s")
                     except Exception as e:
                         logger.error(f"Imbalance Guard: Failed to cancel {vulnerable_side}: {e}")
                     return
@@ -589,6 +596,13 @@ class Maker:
             if cooldown_active:
                 allowed_sides = allowed_sides - cooldown_active
                 logger.debug(f"CEX cooldown active for: {cooldown_active}")
+        
+        # Also respect Imbalance Guard cooldown
+        now = time.time()
+        imb_cooldown_active = {side for side, until in self._imbalance_cancel_cooldown.items() if now < until}
+        if imb_cooldown_active:
+            allowed_sides = allowed_sides - imb_cooldown_active
+            logger.debug(f"Imbalance cooldown active for: {imb_cooldown_active}")
         
         exit_qty = abs(self.state.position) if self.state.position != 0 else None
         await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)
