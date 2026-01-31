@@ -714,6 +714,12 @@ class Maker:
     async def _place_order(self, side: str, price: float, qty: Optional[float] = None, reduce_only: bool = False):
         """Place a single order."""
         import math
+        
+        # Double-check we don't already have an order (concurrent prevention)
+        if self.state.has_order(side):
+            logger.debug(f"Skipping {side} order: already have one")
+            return
+        
         cl_ord_id = f"mm-{side}-{uuid.uuid4().hex[:8]}"
         
         # Different tick sizes for different symbols
@@ -733,6 +739,14 @@ class Maker:
         order_qty = self.config.order_size_btc if qty is None else qty
         qty_str = f"{order_qty:.3f}"
         
+        # Pre-reserve order slot BEFORE sending request (prevents concurrent duplicates)
+        self.state.set_order(side, OpenOrder(
+            cl_ord_id=cl_ord_id,
+            side=side,
+            price=price,
+            qty=order_qty,
+        ))
+        
         logger.info(f"Placing {side} order: {qty_str} @ {price_str} (cl_ord_id: {cl_ord_id})")
         
         try:
@@ -746,16 +760,12 @@ class Maker:
             )
             
             if response.get("code") == 0:
-                # Update local state
-                self.state.set_order(side, OpenOrder(
-                    cl_ord_id=cl_ord_id,
-                    side=side,
-                    price=price,
-                    qty=order_qty,
-                ))
+                # Order placed successfully, slot already reserved
                 self.monitor.record_order()
                 logger.info(f"Order placed successfully: {cl_ord_id}")
             else:
+                # Order failed, clear the pre-reserved slot
+                self.state.set_order(side, None)
                 error_msg = response.get("message", str(response))
                 logger.error(f"Order failed: {response}")
                 send_notify(
@@ -765,6 +775,8 @@ class Maker:
                 )
                 
         except Exception as e:
+            # Order failed, clear the pre-reserved slot
+            self.state.set_order(side, None)
             logger.error(f"Failed to place {side} order: {e}")
             send_notify(
                 "StandX 下单异常",

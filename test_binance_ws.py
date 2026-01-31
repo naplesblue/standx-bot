@@ -13,41 +13,63 @@ async def main():
     async with websockets.connect(WS_URL) as ws:
         print("Connected! Waiting for messages...\n")
         
+        stats = {"bookTicker": 0, "kline": 0, "depthUpdate": 0, "unknown": 0}
         count = 0
-        while count < 10:  # Print first 10 messages
+        
+        while count < 50:  # Check 50 messages
             message = await ws.recv()
-            print(f"RAW[{count}]: {message[:200]}...")  # Print first 200 chars
-            
             data = json.loads(message)
             
-            stream = data.get("stream", "unknown")
-            payload = data.get("data", data)  # If no "data" key, use data itself
+            # Handle flat format (no stream wrapper)
+            if "stream" in data:
+                payload = data.get("data", {})
+            else:
+                payload = data
             
-            if "bookTicker" in stream:
-                bid = float(payload.get("b", 0))
-                ask = float(payload.get("a", 0))
+            event_type = payload.get("e", "unknown")
+            
+            if event_type == "bookTicker":
+                bid = float(payload["b"])
+                ask = float(payload["a"])
                 mid = (bid + ask) / 2
-                print(f"[bookTicker] bid={bid:.2f}, ask={ask:.2f}, mid={mid:.2f}")
-            elif "kline" in stream:
+                stats["bookTicker"] += 1
+                if stats["bookTicker"] <= 3:  # Print first 3
+                    print(f"✅ [bookTicker] mid={mid:.2f}")
+                    
+            elif event_type == "kline":
                 kline = payload.get("k", {})
                 close = float(kline.get("c", 0))
-                vol = float(kline.get("q", 0))
                 closed = kline.get("x", False)
-                print(f"[kline_1s] close={close:.2f}, vol={vol:.2f}, closed={closed}")
-            elif "depth20" in stream:
-                bids = payload.get("bids", [])
-                asks = payload.get("asks", [])
-                if bids and asks:
-                    bid_depth = sum(float(qty) for _, qty in bids[:10])
-                    ask_depth = sum(float(qty) for _, qty in asks[:10])
-                    imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth) if (bid_depth + ask_depth) > 0 else 0
-                    print(f"[depth20] bid_depth={bid_depth:.4f}, ask_depth={ask_depth:.4f}, imbalance={imbalance:.3f}")
+                stats["kline"] += 1
+                if stats["kline"] <= 3:
+                    print(f"✅ [kline] close={close:.2f}, closed={closed}")
+                    
+            elif event_type == "depthUpdate":
+                bids = payload.get("b", [])
+                asks = payload.get("a", [])
+                bid_depth = sum(float(qty) for _, qty in bids[:10])
+                ask_depth = sum(float(qty) for _, qty in asks[:10])
+                total = bid_depth + ask_depth
+                imbalance = (bid_depth - ask_depth) / total if total > 0 else 0
+                stats["depthUpdate"] += 1
+                if stats["depthUpdate"] <= 3:
+                    print(f"✅ [depthUpdate] imbalance={imbalance:.3f}")
             else:
-                print(f"[{stream}] {payload}")
+                stats["unknown"] += 1
+                print(f"❓ [unknown] e={event_type}")
             
             count += 1
         
-        print("\nTest complete!")
+        print(f"\n=== SUMMARY (50 messages) ===")
+        print(f"bookTicker: {stats['bookTicker']}")
+        print(f"kline:      {stats['kline']}")
+        print(f"depthUpdate: {stats['depthUpdate']}")
+        print(f"unknown:    {stats['unknown']}")
+        
+        if stats["bookTicker"] > 0 and stats["depthUpdate"] > 0:
+            print("\n🎉 ALL CEX DATA PARSING WORKS!")
+        else:
+            print("\n❌ SOME PARSING FAILED!")
 
 if __name__ == "__main__":
     asyncio.run(main())
