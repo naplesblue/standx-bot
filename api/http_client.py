@@ -48,7 +48,7 @@ class StandXHTTPClient:
     
     def __init__(self, auth: StandXAuth, latency_log_file: str = None):
         self._auth = auth
-        self._client = httpx.AsyncClient(timeout=30.0)
+        self._client = httpx.AsyncClient(timeout=10.0)  # Reduced from 30s for faster shutdown
         self._latency_log_file = latency_log_file
     
     def set_latency_log_file(self, filepath: str):

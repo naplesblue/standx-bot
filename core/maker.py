@@ -176,6 +176,10 @@ class Maker:
     
     async def _tick(self):
         """Single iteration of the maker logic."""
+        # Priority check: exit immediately if shutdown requested
+        if not self._running:
+            return
+        
         now = time.time()
         if self._last_tick_time > 0:
             dt = now - self._last_tick_time
