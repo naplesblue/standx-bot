@@ -144,22 +144,23 @@ class MarketWSClient:
 
 
 class UserWSClient:
-    """WebSocket client for user data stream (orders, positions) with auto-reconnection."""
+    """WebSocket client for user data stream (orders, positions) with auto-reconnection.
     
-    WS_URL = "wss://perps.standx.com/ws-api/v1"
+    Uses Market Stream endpoint (ws-stream/v1) which supports order/position subscriptions.
+    """
+    
+    # Market Stream endpoint supports order/position subscriptions
+    WS_URL = "wss://perps.standx.com/ws-stream/v1"
     RECONNECT_DELAY = 5  # seconds
     
     def __init__(self, auth: StandXAuth):
         self._auth = auth
         self._ws: Optional[WebSocketClientProtocol] = None
         self._running = False
-        self._session_id: Optional[str] = None
         self._callbacks: dict[str, list[Callable]] = {}
     
     async def connect(self):
         """Connect to user data stream."""
-        import uuid
-        
         logger.info(f"Connecting to user stream: {self.WS_URL}")
         self._ws = await websockets.connect(
             self.WS_URL,
@@ -167,59 +168,50 @@ class UserWSClient:
             ping_timeout=60,     # Long timeout to avoid false disconnects
             close_timeout=10,
         )
-        self._session_id = str(uuid.uuid4())
         self._running = True
         logger.info("User stream connected")
         
-        # Authenticate
+        # Authenticate and subscribe in one message
         await self._authenticate()
     
     async def _authenticate(self):
-        """Authenticate the WebSocket connection."""
+        """Authenticate and subscribe to order/position channels.
+        
+        Market Stream uses combined auth+subscribe format:
+        { "auth": { "token": "<jwt>", "streams": [{ "channel": "order" }, ...] } }
+        """
         if not self._ws or not self._auth.token:
             raise RuntimeError("WebSocket not connected or not authenticated")
         
-        import uuid
+        # Combined auth + subscribe message (per StandX docs)
         msg = {
-            "session_id": self._session_id,
-            "request_id": str(uuid.uuid4()),
-            "method": "auth:login",
-            "params": json.dumps({"token": self._auth.token}),
+            "auth": {
+                "token": self._auth.token,
+                "streams": [
+                    {"channel": "order"},
+                    {"channel": "position"}
+                ]
+            }
         }
         
         await self._ws.send(json.dumps(msg))
-        logger.info("User stream authentication sent")
+        logger.info("User stream auth+subscribe sent")
         
         # Wait for auth response
         response = await self._ws.recv()
         data = json.loads(response)
         
-        if data.get("code") != 0:
+        logger.info(f"Auth response: {data}")
+        
+        # Market Stream returns: { "seq": 1, "channel": "auth", "data": { "code": 200, "msg": "success" } }
+        if data.get("channel") == "auth":
+            auth_data = data.get("data", {})
+            if auth_data.get("code") != 200:
+                raise RuntimeError(f"User stream auth failed: {data}")
+        elif data.get("code") != 0 and data.get("code") is not None:
             raise RuntimeError(f"User stream auth failed: {data}")
         
-        logger.info("User stream authenticated")
-        
-        # Subscribe to order and position channels
-        # StandX API uses RPC-style messages: method + params
-        import uuid
-        
-        order_sub = {
-            "session_id": self._session_id,
-            "request_id": str(uuid.uuid4()),
-            "method": "subscribe",
-            "params": json.dumps({"channel": "order"})
-        }
-        await self._ws.send(json.dumps(order_sub))
-        logger.info("Subscribed to order channel")
-        
-        position_sub = {
-            "session_id": self._session_id,
-            "request_id": str(uuid.uuid4()),
-            "method": "subscribe",
-            "params": json.dumps({"channel": "position"})
-        }
-        await self._ws.send(json.dumps(position_sub))
-        logger.info("Subscribed to position channel")
+        logger.info("User stream authenticated and subscribed to order/position")
     
     async def _reconnect(self):
         """Reconnect and re-authenticate."""
