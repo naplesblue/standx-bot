@@ -41,8 +41,7 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Enable debug logging for maker to diagnose order placement issues
-logging.getLogger("core.maker").setLevel(logging.DEBUG)
-logging.getLogger("__main__").setLevel(logging.DEBUG)
+# logging.getLogger("core.maker").setLevel(logging.DEBUG)
 
 # Configure separate logger for efficiency reports
 efficiency_logger = logging.getLogger("standx.efficiency")
@@ -187,11 +186,6 @@ async def main(config_path: str):
             side = order_data.get("side")
             
             logger.info(f"Order update: cl_ord_id={cl_ord_id}, status={status}, side={side}")
-            logger.debug(f"DEBUG: side_repr={repr(side)}, status_repr={repr(status)}, pending_keys={list(maker._pending_cancels.keys())}")
-            
-            # Force check side
-            if side not in ("buy", "sell"):
-                logger.warning(f"Invalid side: {repr(side)}")
             
             if status and status.lower() in ("filled", "partially_filled", "cancelled", "canceled", "rejected"):
                 # Record fill immediately upon receipt
@@ -229,18 +223,13 @@ async def main(config_path: str):
                     current_order = state.get_order(side)
                     
                     
+                    
                     # Clear pending cancel tracking when we get WS confirmation
                     if cl_ord_id in maker._pending_cancels:
                         status_lower = status.lower()
                         if status_lower in ("cancelled", "canceled", "filled", "rejected"):
                             maker._pending_cancels.pop(cl_ord_id, None)
                             logger.info(f"Pending cancel cleared (WS {status}): {cl_ord_id}")
-                        else:
-                            logger.debug(f"WS update {status} for {cl_ord_id} (pending), not clearing yet")
-                    else:
-                        # Only log at debug if valid ID
-                        if cl_ord_id:
-                            logger.debug(f"WS update {status} for {cl_ord_id}, NOT in pending {list(maker._pending_cancels.keys())}")
                     
                     # Handle unexpected 'open' status for orders we thought were cancelled
                     if status.lower() == "open":
