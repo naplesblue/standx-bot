@@ -169,8 +169,13 @@ class State:
                 return 0
             
             now = time.time()
-            cutoff = now - window_sec
-            recent = [v for t, v in self.imbalance_window if t > cutoff]
+            
+            # Efficient O(k) reverse iteration
+            recent = []
+            for t, v in reversed(self.imbalance_window):
+                if t <= cutoff:
+                    break
+                recent.append(v)
             
             if len(recent) < 3:  # Need at least 3 samples
                 return 0
@@ -208,19 +213,30 @@ class State:
                 return 0.0
                 
             now = time.time()
+            prices = []
+            
             if window_sec:
                 cutoff = now - window_sec
-                prices = [p for t, p in window if t > cutoff]
+                # Efficient O(k) reverse iteration
+                # Note: collected prices will be in reverse chronological order (newest first)
+                # This doesn't affect min/max calculation
+                for t, p in reversed(window):
+                    if t <= cutoff:
+                        break
+                    prices.append(p)
             else:
                 prices = [p for _, p in window]
             
             if len(prices) < 2:
                 return 0.0
             
-            if prices[-1] == 0:
+            # prices[0] is the newest price (since we iterated reversed)
+            current_price = prices[0]
+            
+            if current_price == 0:
                 return float("inf")
             
-            volatility = (max(prices) - min(prices)) / prices[-1] * 10000
+            volatility = (max(prices) - min(prices)) / current_price * 10000
             return volatility
     
     def get_cex_amplitude(self, window_sec: int) -> float:
@@ -234,7 +250,12 @@ class State:
             
             now = time.time()
             cutoff = now - window_sec
-            prices = [p for t, p in self.cex_price_window if t > cutoff]
+            
+            prices = []
+            for t, p in reversed(self.cex_price_window):
+                if t <= cutoff:
+                    break
+                prices.append(p)
             
             if not prices:
                 return 0.0
