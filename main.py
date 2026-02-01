@@ -200,6 +200,24 @@ async def main(config_path: str):
                     order_qty = order_data.get("qty", "0")
                     order_price = order_data.get("price", "0")
                     
+                    try:
+                        fill_price_float = float(fill_price)
+                        # Check for stale market data (Market WS lag)
+                        if fill_price_float > 0 and state.last_dex_price and state.last_dex_price > 0:
+                            current_dex = state.last_dex_price
+                            stale_threshold = 0.0005 # 5bps
+                            
+                            if side == "buy" and current_dex > fill_price_float * (1 + stale_threshold):
+                                diff_pct = (current_dex - fill_price_float) / fill_price_float
+                                logger.warning(f"STALE DATA DETECTED: Bought @ {fill_price_float}, but State DEX={current_dex} (+{diff_pct*10000:.1f}bps). Updating State.")
+                                state.update_dex_price(fill_price_float)
+                            elif side == "sell" and current_dex < fill_price_float * (1 - stale_threshold):
+                                diff_pct = (fill_price_float - current_dex) / current_dex
+                                logger.warning(f"STALE DATA DETECTED: Sold @ {fill_price_float}, but State DEX={current_dex} (-{diff_pct*10000:.1f}bps). Updating State.")
+                                state.update_dex_price(fill_price_float)
+                    except Exception as e:
+                        logger.error(f"Error checking stale price: {e}")
+                    
                     # Capture risk parameters at fill time for diagnosis
                     cex_price = state.last_cex_price or 0
                     dex_price = state.last_dex_price or 0
