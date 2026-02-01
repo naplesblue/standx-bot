@@ -187,6 +187,11 @@ async def main(config_path: str):
             side = order_data.get("side")
             
             logger.info(f"Order update: cl_ord_id={cl_ord_id}, status={status}, side={side}")
+            logger.debug(f"DEBUG: side_repr={repr(side)}, status_repr={repr(status)}, pending_keys={list(maker._pending_cancels.keys())}")
+            
+            # Force check side
+            if side not in ("buy", "sell"):
+                logger.warning(f"Invalid side: {repr(side)}")
             
             if status and status.lower() in ("filled", "partially_filled", "cancelled", "rejected"):
                 # Record fill immediately upon receipt
