@@ -193,7 +193,7 @@ async def main(config_path: str):
             if side not in ("buy", "sell"):
                 logger.warning(f"Invalid side: {repr(side)}")
             
-            if status and status.lower() in ("filled", "partially_filled", "cancelled", "rejected"):
+            if status and status.lower() in ("filled", "partially_filled", "cancelled", "canceled", "rejected"):
                 # Record fill immediately upon receipt
                 if status.lower() in ("filled", "partially_filled"):
                     state.record_fill()
