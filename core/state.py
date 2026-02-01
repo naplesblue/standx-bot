@@ -11,6 +11,7 @@ import logging
 from typing import Optional, Dict
 from dataclasses import dataclass, field
 from threading import Lock
+from collections import deque
 
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,13 @@ class State:
     last_cex_price: Optional[float] = None
     last_dex_update_time: float = 0.0
     last_cex_update_time: float = 0.0
-    cex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
-    dex_price_window: list = field(default_factory=list)  # [(timestamp, price), ...]
-    cex_volume_window: list = field(default_factory=list)  # [(timestamp, notional), ...]
+    cex_price_window: deque = field(default_factory=deque)  # [(timestamp, price), ...]
+    dex_price_window: deque = field(default_factory=deque)  # [(timestamp, price), ...]
+    cex_volume_window: deque = field(default_factory=deque)  # [(timestamp, notional), ...]
     last_cex_volume_update_time: float = 0.0
     
     # Orderbook imbalance data
-    imbalance_window: list = field(default_factory=list)  # [(timestamp, imbalance), ...]
+    imbalance_window: deque = field(default_factory=deque)  # [(timestamp, imbalance), ...]
     last_imbalance: float = 0.0
     last_imbalance_update_time: float = 0.0
     
@@ -71,7 +72,8 @@ class State:
             self.dex_price_window.append((now, price))
 
             cutoff = now - window_sec
-            self.dex_price_window = [(t, p) for t, p in self.dex_price_window if t > cutoff]
+            while self.dex_price_window and self.dex_price_window[0][0] <= cutoff:
+                self.dex_price_window.popleft()
 
     def update_cex_price(self, price: float, window_sec: int = 3600):
         """Update CEX price (Source for Volatility) and maintain sliding window.
@@ -85,9 +87,10 @@ class State:
             self.last_cex_update_time = now
             self.cex_price_window.append((now, price))
             
-            # Clean up old data
+            # Clean up old data using efficient deque popleft
             cutoff = now - window_sec
-            self.cex_price_window = [(t, p) for t, p in self.cex_price_window if t > cutoff]
+            while self.cex_price_window and self.cex_price_window[0][0] <= cutoff:
+                self.cex_price_window.popleft()
 
     def update_cex_volume(self, notional: float, window_sec: int = 3600):
         """Update CEX notional volume (1s kline) and maintain sliding window."""
@@ -97,7 +100,8 @@ class State:
             self.cex_volume_window.append((now, notional))
 
             cutoff = now - window_sec
-            self.cex_volume_window = [(t, v) for t, v in self.cex_volume_window if t > cutoff]
+            while self.cex_volume_window and self.cex_volume_window[0][0] <= cutoff:
+                self.cex_volume_window.popleft()
 
     def get_cex_volume_ratio(self, window_sec: int, min_samples: int) -> tuple[float, float, float, int]:
         """
@@ -110,6 +114,9 @@ class State:
 
             now = time.time()
             cutoff = now - window_sec
+            
+            # Note: iter(deque) is efficient, converting to list for slicing/math is acceptable 
+            # as long as we don't rebuild the whole list for pruning.
             samples = [v for t, v in self.cex_volume_window if t > cutoff]
 
             if len(samples) < min_samples + 1:
@@ -142,7 +149,8 @@ class State:
             self.imbalance_window.append((now, imbalance))
             
             cutoff = now - window_sec
-            self.imbalance_window = [(t, v) for t, v in self.imbalance_window if t > cutoff]
+            while self.imbalance_window and self.imbalance_window[0][0] <= cutoff:
+                self.imbalance_window.popleft()
 
     def get_imbalance_signal(self, window_sec: int, threshold: float) -> int:
         """Detect sustained imbalance direction in orderbook.
