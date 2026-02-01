@@ -334,8 +334,9 @@ class TradingWSClient:
         logger.info(f"Connecting to {self.WS_URL}")
         self._ws = await websockets.connect(
             self.WS_URL,
-            ping_interval=20,
-            ping_timeout=10,
+            # Server sends pings every 10s. Disable client pings to avoid "keepalive ping timeout"
+            # if server doesn't respond to client pings.
+            ping_interval=None,
             close_timeout=5,
         )
         logger.info("Trading WS connected")

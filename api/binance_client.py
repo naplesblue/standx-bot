@@ -70,7 +70,13 @@ class BinanceWSClient:
                     
                 logger.info(f"Connecting to {stream_url}")
                 
-                async with websockets.connect(stream_url) as ws:
+                # Binance sends pings every 3m, expect pong within 10m.
+                # Disable client-side pings to avoid disconnects if server doesn't reply to client pings.
+                async with websockets.connect(
+                    stream_url,
+                    ping_interval=None,
+                    close_timeout=5
+                ) as ws:
                     self._ws = ws
                     logger.info("Binance WS connected")
                     
