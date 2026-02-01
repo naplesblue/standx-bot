@@ -128,7 +128,7 @@ class Maker:
         Called when StandX price updates.
         Updates Anchor Price for orders.
         """
-        self.state.update_dex_price(price, window_sec=3600)
+        self.state.update_dex_price(price, window_sec=900)
         
         # Signal check
         self._pending_check.set()
@@ -139,8 +139,8 @@ class Maker:
         Called when Binance price updates.
         Updates Volatility window and signals check.
         """
-        # Keep 1h history to support Recovery Mode (5m window)
-        self.state.update_cex_price(price, window_sec=3600)
+        # Keep 15m history to support Recovery Mode (5m window) with buffer
+        self.state.update_cex_price(price, window_sec=900)
         
         # Signal check (high volatility should trigger immediate reaction)
         self._pending_check.set()
