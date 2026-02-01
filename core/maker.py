@@ -188,6 +188,10 @@ class Maker:
             return
         
         now = time.time()
+        # Debug log every 5s to confirm tick is running
+        if now - self._last_tick_time > 5:
+            logger.debug(f"_tick running, dt={now - self._last_tick_time:.2f}s")
+            
         if self._last_tick_time > 0:
             dt = now - self._last_tick_time
         else:
@@ -629,6 +633,10 @@ class Maker:
         if pending_cancel_sides:
             allowed_sides = allowed_sides - pending_cancel_sides
             logger.debug(f"Pending cancel blocking: {pending_cancel_sides}")
+        
+        # Log allowed sides before placing orders
+        if not allowed_sides:
+            logger.debug("No allowed sides for new orders")
         
         exit_qty = abs(self.state.position) if self.state.position != 0 else None
         await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)

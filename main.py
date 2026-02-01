@@ -40,6 +40,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+# Enable debug logging for maker to diagnose order placement issues
+logging.getLogger("core.maker").setLevel(logging.DEBUG)
+
 # Configure separate logger for efficiency reports
 efficiency_logger = logging.getLogger("standx.efficiency")
 efficiency_logger.setLevel(logging.INFO)
