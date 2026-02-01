@@ -224,7 +224,7 @@ async def main(config_path: str):
                     
                     # Clear pending cancel tracking when we get WS confirmation
                     if cl_ord_id in maker._pending_cancels:
-                        if status.lower() in ("cancelled", "filled", "rejected"):
+                        if status.lower() in ("cancelled", "canceled", "filled", "rejected"):
                             maker._pending_cancels.pop(cl_ord_id, None)
                             logger.info(f"Pending cancel cleared (WS {status}): {cl_ord_id}")
                     
