@@ -212,6 +212,22 @@ async def main(config_path: str):
 
                 if side in ("buy", "sell"):
                     current_order = state.get_order(side)
+                    
+                    # Clear pending cancel tracking when we get WS confirmation
+                    if cl_ord_id in maker._pending_cancels:
+                        if status.lower() in ("cancelled", "filled", "rejected"):
+                            maker._pending_cancels.pop(cl_ord_id, None)
+                            logger.info(f"Pending cancel cleared (WS {status}): {cl_ord_id}")
+                    
+                    # Handle unexpected 'open' status for orders we thought were cancelled
+                    if status.lower() == "open":
+                        if cl_ord_id in maker._pending_cancels:
+                            # Order is open but we're trying to cancel it - wait for cancel confirmation
+                            logger.warning(f"Order still open while pending cancel: {cl_ord_id}")
+                        elif not current_order or current_order.cl_ord_id != cl_ord_id:
+                            # Order is open but not tracked locally - DANGER! Cancel it immediately
+                            logger.error(f"ORPHAN ORDER DETECTED: {cl_ord_id} is open but not tracked locally!")
+                    
                     if current_order and current_order.cl_ord_id == cl_ord_id:
                         if status.lower() in ("filled", "cancelled", "rejected"):
                             logger.info(f"Order {status}: clearing {side} from state")

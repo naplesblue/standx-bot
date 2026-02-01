@@ -78,6 +78,9 @@ class Maker:
         # Imbalance Guard cancel cooldown (prevent immediate re-order after cancel)
         self._imbalance_cancel_cooldown = {}  # {side: until_timestamp}
         
+        # Pending cancel tracking - prevent new orders on sides with pending cancels
+        self._pending_cancels = {}  # {cl_ord_id: side}
+        
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
         self._last_tick_time = 0.0
@@ -562,11 +565,27 @@ class Maker:
             for order in orders_to_cancel:
                 logger.info(f"Cancelling order: {order.cl_ord_id}")
                 try:
-                    await self.client.cancel_order(order.cl_ord_id)
-                    self.state.set_order(order.side, None)
-                    self.monitor.record_cancel()
+                    # Track as pending cancel BEFORE sending request
+                    self._pending_cancels[order.cl_ord_id] = order.side
+                    
+                    response = await self.client.cancel_order(order.cl_ord_id)
+                    
+                    # Validate response - only clear state if cancel was accepted
+                    if response.get("code") == 0:
+                        self.state.set_order(order.side, None)
+                        self.monitor.record_cancel()
+                        logger.info(f"Cancel confirmed: {order.cl_ord_id}")
+                    else:
+                        # Cancel rejected by exchange - DON'T clear local state
+                        error_msg = response.get("message", str(response))
+                        logger.error(f"Cancel rejected by exchange: {order.cl_ord_id}: {error_msg}")
+                        # Remove from pending since we got a response
+                        self._pending_cancels.pop(order.cl_ord_id, None)
+                        
                 except Exception as e:
                     logger.error(f"Failed to cancel order {order.cl_ord_id}: {e}")
+                    # Remove from pending on error
+                    self._pending_cancels.pop(order.cl_ord_id, None)
                     send_notify(
                         "StandX 撤单失败",
                         f"{self.config.symbol} 撤单失败: {e}",
@@ -603,6 +622,12 @@ class Maker:
         if imb_cooldown_active:
             allowed_sides = allowed_sides - imb_cooldown_active
             logger.debug(f"Imbalance cooldown active for: {imb_cooldown_active}")
+        
+        # Block sides that have pending cancels (waiting for WS confirmation)
+        pending_cancel_sides = set(self._pending_cancels.values())
+        if pending_cancel_sides:
+            allowed_sides = allowed_sides - pending_cancel_sides
+            logger.debug(f"Pending cancel blocking: {pending_cancel_sides}")
         
         exit_qty = abs(self.state.position) if self.state.position != 0 else None
         await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)
