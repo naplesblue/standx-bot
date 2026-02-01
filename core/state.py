@@ -169,6 +169,7 @@ class State:
                 return 0
             
             now = time.time()
+            cutoff = now - window_sec
             
             # Efficient O(k) reverse iteration
             recent = []
