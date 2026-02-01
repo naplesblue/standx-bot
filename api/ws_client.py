@@ -301,3 +301,226 @@ class UserWSClient:
         if self._ws:
             await self._ws.close()
             self._ws = None
+
+
+class TradingWSClient:
+    """
+    WebSocket client for trading operations via ws-api/v1.
+    
+    Provides order:new and order:cancel methods with request_id tracking.
+    Supports timeout and HTTP fallback on failure.
+    """
+    
+    WS_URL = "wss://perps.standx.com/ws-api/v1"
+    RECONNECT_DELAY = 3
+    REQUEST_TIMEOUT = 5.0  # seconds
+    
+    def __init__(self, auth: StandXAuth, http_client=None):
+        self._auth = auth
+        self._http_client = http_client  # HTTP fallback
+        self._ws: Optional[WebSocketClientProtocol] = None
+        self._running = False
+        self._session_id = str(__import__('uuid').uuid4())
+        
+        # Request tracking: request_id -> Future
+        self._pending_requests: dict = {}
+        
+        # Message count for heartbeat
+        self._msg_count = 0
+        self._last_heartbeat = 0
+    
+    async def connect(self):
+        """Connect to trading WS and authenticate."""
+        logger.info(f"Connecting to {self.WS_URL}")
+        self._ws = await websockets.connect(
+            self.WS_URL,
+            ping_interval=20,
+            ping_timeout=10,
+            close_timeout=5,
+        )
+        logger.info("Trading WS connected")
+        await self._authenticate()
+    
+    async def _authenticate(self):
+        """Authenticate with auth:login method."""
+        request_id = str(__import__('uuid').uuid4())
+        
+        msg = {
+            "session_id": self._session_id,
+            "request_id": request_id,
+            "method": "auth:login",
+            "params": __import__('json').dumps({"token": self._auth.token})
+        }
+        
+        await self._ws.send(__import__('json').dumps(msg))
+        logger.info("Trading WS auth sent")
+        
+        # Wait for auth response
+        try:
+            response = await asyncio.wait_for(self._ws.recv(), timeout=5.0)
+            data = __import__('json').loads(response)
+            if data.get("code") not in (0, 200):
+                raise RuntimeError(f"Trading WS auth failed: {data}")
+            logger.info("Trading WS authenticated")
+        except asyncio.TimeoutError:
+            raise RuntimeError("Trading WS auth timeout")
+    
+    async def new_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: str,
+        price: str,
+        cl_ord_id: str,
+        order_type: str = "limit",
+        time_in_force: str = "gtc",
+        reduce_only: bool = False,
+    ) -> dict:
+        """
+        Place a new order via WebSocket.
+        
+        Falls back to HTTP if WS fails.
+        """
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "cl_ord_id": cl_ord_id,
+            "order_type": order_type,
+            "time_in_force": time_in_force,
+            "reduce_only": reduce_only,
+        }
+        
+        try:
+            return await self._send_order_request("order:new", params)
+        except Exception as e:
+            logger.warning(f"WS order:new failed, falling back to HTTP: {e}")
+            if self._http_client:
+                return await self._http_client.new_order(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    cl_ord_id=cl_ord_id,
+                    order_type=order_type,
+                    time_in_force=time_in_force,
+                    reduce_only=reduce_only,
+                )
+            raise
+    
+    async def cancel_order(self, cl_ord_id: str) -> dict:
+        """
+        Cancel an order via WebSocket.
+        
+        Falls back to HTTP if WS fails.
+        """
+        params = {"cl_ord_id": cl_ord_id}
+        
+        try:
+            return await self._send_order_request("order:cancel", params)
+        except Exception as e:
+            logger.warning(f"WS order:cancel failed, falling back to HTTP: {e}")
+            if self._http_client:
+                return await self._http_client.cancel_order(cl_ord_id)
+            raise
+    
+    async def _send_order_request(self, method: str, params: dict) -> dict:
+        """Send an order request and wait for response."""
+        if not self._ws or self._ws.closed:
+            raise RuntimeError("Trading WS not connected")
+        
+        request_id = str(__import__('uuid').uuid4())
+        
+        # Sign the request
+        params_json = __import__('json').dumps(params)
+        sig_headers = self._auth.sign_request(params_json)
+        
+        msg = {
+            "session_id": self._session_id,
+            "request_id": request_id,
+            "method": method,
+            "header": {
+                "x-request-id": sig_headers["x-request-id"],
+                "x-request-timestamp": sig_headers["x-request-timestamp"],
+                "x-request-signature": sig_headers["x-request-signature"],
+            },
+            "params": params_json,
+        }
+        
+        # Create a Future for this request
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        self._pending_requests[request_id] = future
+        
+        try:
+            await self._ws.send(__import__('json').dumps(msg))
+            logger.debug(f"Trading WS sent {method}: {request_id}")
+            
+            # Wait for response with timeout
+            response = await asyncio.wait_for(future, timeout=self.REQUEST_TIMEOUT)
+            return response
+        except asyncio.TimeoutError:
+            logger.error(f"Trading WS request timeout: {method} {request_id}")
+            raise
+        finally:
+            self._pending_requests.pop(request_id, None)
+    
+    async def run(self):
+        """Run the message receive loop with auto-reconnection."""
+        self._running = True
+        
+        while self._running:
+            try:
+                if not self._ws or self._ws.closed:
+                    try:
+                        await self.connect()
+                    except Exception as e:
+                        logger.error(f"Trading WS connection failed: {e}")
+                        await asyncio.sleep(self.RECONNECT_DELAY)
+                        continue
+                
+                # Receive and dispatch messages
+                try:
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=1.0)
+                    self._msg_count += 1
+                    
+                    data = __import__('json').loads(raw)
+                    request_id = data.get("request_id")
+                    
+                    # Resolve pending request
+                    if request_id and request_id in self._pending_requests:
+                        future = self._pending_requests[request_id]
+                        if not future.done():
+                            future.set_result(data)
+                    
+                    # Log heartbeat periodically
+                    now = __import__('time').time()
+                    if now - self._last_heartbeat > 30:
+                        logger.info(f"[Heartbeat] Trading WS alive, {self._msg_count} msgs")
+                        self._last_heartbeat = now
+                        
+                except asyncio.TimeoutError:
+                    continue
+                except websockets.ConnectionClosed as e:
+                    logger.warning(f"Trading WS connection closed: {e}")
+                    self._ws = None
+                    
+            except Exception as e:
+                logger.error(f"Trading WS error: {e}")
+                self._ws = None
+                if self._running:
+                    await asyncio.sleep(self.RECONNECT_DELAY)
+    
+    async def close(self):
+        """Close the WebSocket connection."""
+        self._running = False
+        # Fail all pending requests
+        for request_id, future in self._pending_requests.items():
+            if not future.done():
+                future.set_exception(RuntimeError("Connection closed"))
+        self._pending_requests.clear()
+        
+        if self._ws:
+            await self._ws.close()
+            self._ws = None

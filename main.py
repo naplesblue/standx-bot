@@ -14,7 +14,7 @@ import time
 from config import load_config
 from api.auth import StandXAuth
 from api.http_client import StandXHTTPClient
-from api.ws_client import MarketWSClient, UserWSClient
+from api.ws_client import MarketWSClient, UserWSClient, TradingWSClient
 from api.binance_client import BinanceWSClient
 from api.telegram import TelegramBot
 from core.state import State
@@ -116,8 +116,11 @@ async def main(config_path: str):
     
     state = State()
     
-    # Initialize maker
-    maker = Maker(config, http_client, state)
+    # Initialize trading WS client (primary channel for orders)
+    trading_ws = TradingWSClient(auth, http_client=http_client)
+    
+    # Initialize maker with trading WS client
+    maker = Maker(config, http_client, state, trading_ws_client=trading_ws)
     
     # Set reduce position log file
     reduce_log_file = f"reduce_{config_name}.log"
@@ -140,6 +143,9 @@ async def main(config_path: str):
         await market_ws.subscribe_price(config.symbol)
         
         await user_ws.connect()
+        
+        # Connect trading WS (for order operations)
+        await trading_ws.connect()
         
         # Register price callback - triggers order checks
         def on_price(data):
@@ -357,6 +363,7 @@ async def main(config_path: str):
             asyncio.create_task(sync_stats_task(), name="sync_stats"),
             asyncio.create_task(market_ws.run(), name="market_ws"),
             asyncio.create_task(user_ws.run(), name="user_ws"),
+            asyncio.create_task(trading_ws.run(), name="trading_ws"),
             asyncio.create_task(maker.run(), name="maker"),
             asyncio.create_task(shutdown_event.wait(), name="shutdown"),
         ]
@@ -379,6 +386,7 @@ async def main(config_path: str):
         await maker.stop()
         await market_ws.close()
         await user_ws.close()
+        await trading_ws.close()
         if binance_ws:
             await binance_ws.close()
         if telegram_bot:

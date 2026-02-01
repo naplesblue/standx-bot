@@ -53,9 +53,10 @@ def send_notify(title: str, message: str, priority: str = "normal"):
 class Maker:
     """Market making logic."""
     
-    def __init__(self, config: Config, client: StandXHTTPClient, state: State):
+    def __init__(self, config: Config, client: StandXHTTPClient, state: State, trading_ws_client=None):
         self.config = config
-        self.client = client
+        self.client = client  # HTTP client (backup)
+        self.trading_client = trading_ws_client if trading_ws_client else client  # WS or HTTP
         self.state = state
         self._running = False
         self._pending_check = asyncio.Event()
@@ -403,7 +404,7 @@ class Maker:
                         f"(imbalance={self.state.last_imbalance:.2f}), 撤销 {vulnerable_side} 单"
                     )
                     try:
-                        await self.client.cancel_order(order.cl_ord_id)
+                        await self.trading_client.cancel_order(order.cl_ord_id)
                         self.state.set_order(vulnerable_side, None)
                         self.monitor.record_cancel()
                         # Add cooldown to prevent immediate re-order on same side
@@ -568,7 +569,7 @@ class Maker:
                     # Track as pending cancel BEFORE sending request
                     self._pending_cancels[order.cl_ord_id] = order.side
                     
-                    response = await self.client.cancel_order(order.cl_ord_id)
+                    response = await self.trading_client.cancel_order(order.cl_ord_id)
                     
                     # Validate response - only clear state if cancel was accepted
                     if response.get("code") == 0:
@@ -827,7 +828,7 @@ class Maker:
         )
         
         try:
-            response = await self.client.new_order(
+            response = await self.trading_client.new_order(
                 symbol=self.config.symbol,
                 side=side,
                 qty=qty_str,
@@ -950,7 +951,7 @@ class Maker:
             cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
             qty_str = f"{reduce_qty:.3f}"
             
-            response = await self.client.new_order(
+            response = await self.trading_client.new_order(
                 symbol=self.config.symbol,
                 side=reduce_side,
                 qty=qty_str,
@@ -1026,7 +1027,7 @@ class Maker:
                 try:
                     open_orders = await self.client.query_open_orders(self.config.symbol)
                     for order in open_orders:
-                        await self.client.cancel_order(order.cl_ord_id)
+                        await self.trading_client.cancel_order(order.cl_ord_id)
                         self.monitor.record_cancel()
                     self.state.clear_all_orders()
                 except Exception as e:
@@ -1039,7 +1040,7 @@ class Maker:
                     logger.critical(f"StopLoss: Closing position {qty} {side}")
                     
                     try:
-                        await self.client.new_order(
+                        await self.trading_client.new_order(
                             symbol=self.config.symbol,
                             side=side,
                             qty=f"{qty:.3f}",
