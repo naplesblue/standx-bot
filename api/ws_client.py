@@ -427,7 +427,15 @@ class TradingWSClient:
     
     async def _send_order_request(self, method: str, params: dict) -> dict:
         """Send an order request and wait for response."""
-        if not self._ws or self._ws.closed:
+        # Check connection (compatible with different websockets versions)
+        ws_valid = False
+        if self._ws:
+            try:
+                ws_valid = getattr(self._ws, 'open', True) and not getattr(self._ws, 'closed', False)
+            except:
+                ws_valid = False
+        
+        if not ws_valid:
             raise RuntimeError("Trading WS not connected")
         
         request_id = str(__import__('uuid').uuid4())
@@ -472,7 +480,23 @@ class TradingWSClient:
         
         while self._running:
             try:
-                if not self._ws or self._ws.closed:
+                # Check if connection is valid (compatible with different websockets versions)
+                ws_closed = False
+                if not self._ws:
+                    ws_closed = True
+                else:
+                    try:
+                        # Try different ways to check connection state
+                        ws_closed = getattr(self._ws, 'closed', None) or not self._ws.open
+                    except AttributeError:
+                        # Fallback: try to check state
+                        try:
+                            from websockets.protocol import State
+                            ws_closed = self._ws.state != State.OPEN
+                        except:
+                            ws_closed = True
+                
+                if ws_closed:
                     try:
                         await self.connect()
                     except Exception as e:
