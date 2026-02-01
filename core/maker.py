@@ -632,7 +632,7 @@ class Maker:
         pending_cancel_sides = set(self._pending_cancels.values())
         if pending_cancel_sides:
             allowed_sides = allowed_sides - pending_cancel_sides
-            logger.debug(f"Pending cancel blocking: {pending_cancel_sides}")
+            logger.debug(f"Pending cancel blocking: {list(self._pending_cancels.keys())} -> {pending_cancel_sides}")
         
         # Log allowed sides before placing orders
         if not allowed_sides:
