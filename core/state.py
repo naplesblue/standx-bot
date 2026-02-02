@@ -57,6 +57,8 @@ class State:
     
     # Lock for thread safety
     _lock: Lock = field(default_factory=Lock)
+    _volume_ratio_cache_key: tuple = field(default_factory=tuple)
+    _volume_ratio_cache_val: tuple = field(default_factory=tuple)
     
     @property
     def last_price(self):
@@ -109,8 +111,15 @@ class State:
         Ratio is computed against the average of the baseline window excluding current.
         """
         with self._lock:
+            cache_key = (self.last_cex_volume_update_time, window_sec, min_samples)
+            if cache_key == self._volume_ratio_cache_key:
+                return self._volume_ratio_cache_val
+
             if not self.cex_volume_window:
-                return 0.0, 0.0, 0.0, 0
+                result = (0.0, 0.0, 0.0, 0)
+                self._volume_ratio_cache_key = cache_key
+                self._volume_ratio_cache_val = result
+                return result
 
             now = time.time()
             cutoff = now - window_sec
@@ -133,17 +142,29 @@ class State:
                 sample_count += 1
 
             if current is None:
-                return 0.0, 0.0, 0.0, 0
+                result = (0.0, 0.0, 0.0, 0)
+                self._volume_ratio_cache_key = cache_key
+                self._volume_ratio_cache_val = result
+                return result
 
             if baseline_count < min_samples:
-                return 0.0, 0.0, 0.0, sample_count
+                result = (0.0, 0.0, 0.0, sample_count)
+                self._volume_ratio_cache_key = cache_key
+                self._volume_ratio_cache_val = result
+                return result
             
             avg = baseline_sum / baseline_count if baseline_count else 0.0
             if avg <= 0:
-                return 0.0, current, avg, baseline_count
+                result = (0.0, current, avg, baseline_count)
+                self._volume_ratio_cache_key = cache_key
+                self._volume_ratio_cache_val = result
+                return result
 
             ratio = current / avg
-            return ratio, current, avg, baseline_count
+            result = (ratio, current, avg, baseline_count)
+            self._volume_ratio_cache_key = cache_key
+            self._volume_ratio_cache_val = result
+            return result
 
     def update_imbalance(self, bid_depth: float, ask_depth: float, window_sec: int = 10):
         """Update orderbook imbalance data and maintain sliding window.
@@ -178,9 +199,21 @@ class State:
             -1: Sustained sell pressure (ask > bid), price likely to fall
             0: No clear signal or insufficient data
         """
+        avg_imbalance, count = self.get_imbalance_stats(window_sec)
+        if count < 3:
+            return 0
+        
+        if avg_imbalance > threshold:
+            return 1  # Buy pressure
+        elif avg_imbalance < -threshold:
+            return -1  # Sell pressure
+        return 0
+
+    def get_imbalance_stats(self, window_sec: int) -> tuple[float, int]:
+        """Return average imbalance and sample count for the window."""
         with self._lock:
             if not self.imbalance_window:
-                return 0
+                return 0.0, 0
             
             now = time.time()
             cutoff = now - window_sec
@@ -194,16 +227,11 @@ class State:
                 imbalance_sum += v
                 count += 1
             
-            if count < 3:  # Need at least 3 samples
-                return 0
+            if count == 0:
+                return 0.0, 0
             
             avg_imbalance = imbalance_sum / count
-            
-            if avg_imbalance > threshold:
-                return 1  # Buy pressure
-            elif avg_imbalance < -threshold:
-                return -1  # Sell pressure
-            return 0
+            return avg_imbalance, count
 
     def _get_window(self, source: str):
         if source == "cex":

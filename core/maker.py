@@ -93,6 +93,17 @@ class Maker:
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
         self._last_tick_time = 0.0
+        self._price_window_sec = self._calc_price_window_sec()
+
+    def _calc_price_window_sec(self) -> float:
+        candidates = [
+            self.config.recovery_window_sec,
+            self.config.volatility_window_sec,
+            self.config.amplitude_window_sec,
+            self.config.velocity_check_window_sec,
+        ]
+        max_window = max([v for v in candidates if v is not None and v > 0] or [0.0])
+        return max(max_window, 5.0)
     
     async def initialize(self):
         """Initialize state from exchange."""
@@ -136,7 +147,7 @@ class Maker:
         Called when StandX price updates.
         Updates Anchor Price for orders.
         """
-        self.state.update_dex_price(price, window_sec=900)
+        self.state.update_dex_price(price, window_sec=self._price_window_sec)
         
         # Signal check
         self._pending_check.set()
@@ -147,8 +158,8 @@ class Maker:
         Called when Binance price updates.
         Updates Volatility window and signals check.
         """
-        # Keep 15m history to support Recovery Mode (5m window) with buffer
-        self.state.update_cex_price(price, window_sec=900)
+        # Keep dynamic history based on configured windows
+        self.state.update_cex_price(price, window_sec=self._price_window_sec)
         
         # Signal check (high volatility should trigger immediate reaction)
         self._pending_check.set()
@@ -405,11 +416,21 @@ class Maker:
 
         # Step -1.4: Imbalance Guard (cancel vulnerable side order)
         imbalance_dir = 0
+        imbalance_warn_dir = 0
         if self.config.binance_symbol and self.config.imbalance_guard_enabled:
-            imbalance_dir = self.state.get_imbalance_signal(
+            avg_imbalance, imbalance_count = self.state.get_imbalance_stats(
                 window_sec=self.config.imbalance_window_sec,
-                threshold=self.config.imbalance_guard_threshold,
             )
+            if imbalance_count >= 3:
+                if avg_imbalance > self.config.imbalance_guard_threshold:
+                    imbalance_dir = 1
+                elif avg_imbalance < -self.config.imbalance_guard_threshold:
+                    imbalance_dir = -1
+
+                if avg_imbalance > self.config.imbalance_warn_threshold:
+                    imbalance_warn_dir = 1
+                elif avg_imbalance < -self.config.imbalance_warn_threshold:
+                    imbalance_warn_dir = -1
             
             if imbalance_dir != 0:
                 # Buy pressure (imbalance > 0) -> price going UP -> SELL order at risk (price approaching)
@@ -451,14 +472,8 @@ class Maker:
             caution = True
         
         # Imbalance warn check (lower threshold than guard)
-        imbalance_warn_dir = 0
-        if self.config.binance_symbol and self.config.imbalance_guard_enabled:
-            imbalance_warn_dir = self.state.get_imbalance_signal(
-                window_sec=self.config.imbalance_window_sec,
-                threshold=self.config.imbalance_warn_threshold,
-            )
-            if imbalance_warn_dir != 0:
-                caution = True
+        if imbalance_warn_dir != 0:
+            caution = True
 
         base_buy_bps = tight_bps
         base_sell_bps = tight_bps
