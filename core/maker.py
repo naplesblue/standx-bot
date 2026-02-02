@@ -328,16 +328,23 @@ class Maker:
 
             amp_warn_bps = tight_bps * self.config.amplitude_warn_ratio_threshold
             stable = True
+            unstable_reason = ""
+            
             if spread_bps is not None and spread_bps > self.config.spread_recovery_bps:
                 stable = False
-            if vol_bps > self.config.recovery_volatility_bps:
+                unstable_reason = f"Spread {spread_bps:.2f}bps > {self.config.spread_recovery_bps}bps"
+            elif vol_bps > self.config.recovery_volatility_bps:
                 stable = False
-            if warn_trend_dir != 0:
+                unstable_reason = f"Vol {vol_bps:.2f}bps > {self.config.recovery_volatility_bps}bps"
+            elif warn_trend_dir != 0:
                 stable = False
-            if amp_bps > amp_warn_bps:
+                unstable_reason = f"Trend {warn_trend_dir}"
+            elif amp_bps > amp_warn_bps:
                 stable = False
-            if volume_ratio > self.config.volume_warn_ratio and volume_samples >= self.config.volume_min_samples:
+                unstable_reason = f"Amp {amp_bps:.2f}bps > {amp_warn_bps:.2f}bps"
+            elif volume_ratio > self.config.volume_warn_ratio and volume_samples >= self.config.volume_min_samples:
                 stable = False
+                unstable_reason = f"VolRatio {volume_ratio:.2f} > {self.config.volume_warn_ratio}"
 
             if stable:
                 if self._risk_guard_stable_start is None:
@@ -354,7 +361,7 @@ class Maker:
                 self._risk_guard_stable_start = None
             else:
                 if self._risk_guard_stable_start is not None:
-                    logger.info("Risk Guard unstable again. Resetting timer.")
+                    logger.info(f"Risk Guard unstable again ({unstable_reason}). Resetting timer.")
                     self._risk_guard_stable_start = None
                 return
 
