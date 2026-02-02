@@ -188,6 +188,14 @@ class Maker:
             return
         
         now = time.time()
+        
+        # Debounce/Rate Limit: Don't run tick logic too frequently
+        # This prevents 100% CPU usage when Binance sends high-frequency updates (e.g. 50Hz)
+        if self._last_tick_time > 0:
+            time_since_last = now - self._last_tick_time
+            if time_since_last < self.config.min_tick_interval_sec:
+               return 
+        
         if self._last_tick_time > 0:
             dt = now - self._last_tick_time
         else:

@@ -33,6 +33,7 @@ class Config:
     min_profit_bps: float = 2
     fill_cooldown_sec: int = 10
     maker_min_rest_sec: float = 3.0
+    min_tick_interval_sec: float = 0.1
     recovery_window_sec: int = 300
     recovery_volatility_bps: float = 25
     stop_loss_cooldown_sec: int = 600
@@ -99,6 +100,7 @@ class Config:
             min_profit_bps=data.get("min_profit_bps", 2),
             fill_cooldown_sec=data.get("fill_cooldown_sec", 10),
             maker_min_rest_sec=data.get("maker_min_rest_sec", 3.0),
+            min_tick_interval_sec=data.get("min_tick_interval_sec", 0.1),
             recovery_window_sec=data.get("recovery_window_sec", 300),
             recovery_volatility_bps=data.get("recovery_volatility_bps", 25),
             stop_loss_cooldown_sec=data.get("stop_loss_cooldown_sec", 600),
