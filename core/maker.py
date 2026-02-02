@@ -88,7 +88,9 @@ class Maker:
         self._imbalance_cancel_cooldown = {}  # {side: until_timestamp}
         
         # Pending cancel tracking - prevent new orders on sides with pending cancels
-        self._pending_cancels = {}  # {cl_ord_id: side}
+        self._pending_cancels = {}  # {cl_ord_id: (side, timestamp)}
+        self._pending_cancel_ttl_sec = 60.0
+        self._last_pending_cancel_cleanup = 0.0
         
         # Performance Monitor
         self.monitor = EfficiencyMonitor()
@@ -207,6 +209,8 @@ class Maker:
             return
         
         now = time.time()
+        self._cleanup_pending_cancels(now)
+        self._cleanup_cooldowns(now)
         
         # Debounce/Rate Limit: Don't run tick logic too frequently
         # This prevents 100% CPU usage when Binance sends high-frequency updates (e.g. 50Hz)
@@ -597,7 +601,7 @@ class Maker:
                 logger.info(f"Cancelling order: {order.cl_ord_id}")
                 try:
                     # Track as pending cancel BEFORE sending request
-                    self._pending_cancels[order.cl_ord_id] = order.side
+                    self._pending_cancels[order.cl_ord_id] = (order.side, time.time())
                     
                     response = await self.trading_client.cancel_order(order.cl_ord_id)
                     
@@ -655,7 +659,7 @@ class Maker:
             logger.debug(f"Imbalance cooldown active for: {imb_cooldown_active}")
         
         # Block sides that have pending cancels (waiting for WS confirmation)
-        pending_cancel_sides = set(self._pending_cancels.values())
+        pending_cancel_sides = {side for side, _ in self._pending_cancels.values()}
         if pending_cancel_sides:
             allowed_sides = allowed_sides - pending_cancel_sides
             logger.debug(f"Pending cancels blocking sides: {pending_cancel_sides}")
@@ -772,7 +776,7 @@ class Maker:
                         continue
                     try:
                         # Track as pending cancel to block new orders until WS confirms
-                        self._pending_cancels[order.cl_ord_id] = order.side
+                        self._pending_cancels[order.cl_ord_id] = (order.side, time.time())
                         response = await self.trading_client.cancel_order(order.cl_ord_id)
                         if response.get("code") == 0:
                             self.state.set_order(order.side, None)
@@ -791,6 +795,32 @@ class Maker:
         except Exception as e:
             logger.error(f"{reason}: Failed to cancel orders: {e}")
             return False
+
+    def _cleanup_pending_cancels(self, now: float):
+        if now - self._last_pending_cancel_cleanup < 5.0:
+            return
+        self._last_pending_cancel_cleanup = now
+        if not self._pending_cancels:
+            return
+        expired = [
+            cl_ord_id
+            for cl_ord_id, (_, ts) in self._pending_cancels.items()
+            if now - ts > self._pending_cancel_ttl_sec
+        ]
+        for cl_ord_id in expired:
+            self._pending_cancels.pop(cl_ord_id, None)
+        if expired:
+            logger.warning(f"Pending cancels expired and cleared: {len(expired)}")
+
+    def _cleanup_cooldowns(self, now: float):
+        if hasattr(self, "_cex_cancel_cooldown") and self._cex_cancel_cooldown:
+            expired = [side for side, until in self._cex_cancel_cooldown.items() if now >= until]
+            for side in expired:
+                self._cex_cancel_cooldown.pop(side, None)
+        if self._imbalance_cancel_cooldown:
+            expired = [side for side, until in self._imbalance_cancel_cooldown.items() if now >= until]
+            for side in expired:
+                self._imbalance_cancel_cooldown.pop(side, None)
 
     async def _activate_risk_guard(self, reason: str):
         """Activate risk guard, cancel orders, and start cooldown timer."""

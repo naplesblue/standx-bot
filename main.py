@@ -271,7 +271,7 @@ async def main(config_path: str):
                             logger.error(f"ORPHAN ORDER DETECTED: {cl_ord_id} is open but not tracked locally!")
                             if cl_ord_id not in maker._pending_cancels:
                                 if side in ("buy", "sell"):
-                                    maker._pending_cancels[cl_ord_id] = side
+                                    maker._pending_cancels[cl_ord_id] = (side, time.time())
                                 asyncio.create_task(cancel_orphan_order(cl_ord_id, side))
                     
                     if current_order and current_order.cl_ord_id == cl_ord_id:
