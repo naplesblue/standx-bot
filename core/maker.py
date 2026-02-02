@@ -643,7 +643,10 @@ class Maker:
         pending_cancel_sides = set(self._pending_cancels.values())
         if pending_cancel_sides:
             allowed_sides = allowed_sides - pending_cancel_sides
+            logger.debug(f"Pending cancels blocking sides: {pending_cancel_sides}")
         
+        logger.debug(f"Tick targets: Buy {buy_target:.1f}bps, Sell {sell_target:.1f}bps, Allowed: {allowed_sides}")
+
         exit_qty = abs(self.state.position) if self.state.position != 0 else None
         await self._place_missing_orders(buy_target, sell_target, allowed_sides, exit_qty=exit_qty)
     
@@ -722,12 +725,20 @@ class Maker:
             qty = exit_qty if exit_side == "buy" else None
             if qty is None or qty > 0:
                 await self._place_order("buy", buy_target_price, qty=qty, reduce_only=reduce_only and exit_side == "buy")
+            else:
+                logger.debug(f"Skipping BUY: qty={qty}")
+        elif "buy" not in allowed_sides:
+            logger.debug("Skipping BUY: not allowed")
         
         # Place sell order if missing
         if "sell" in allowed_sides and not self.state.has_order("sell"):
             qty = exit_qty if exit_side == "sell" else None
             if qty is None or qty > 0:
                 await self._place_order("sell", sell_target_price, qty=qty, reduce_only=reduce_only and exit_side == "sell")
+            else:
+                logger.debug(f"Skipping SELL: qty={qty}")
+        elif "sell" not in allowed_sides:
+            logger.debug("Skipping SELL: not allowed")
     
     async def _cancel_all_orders(self, reason: str = "Risk Guard"):
         """Helper to cancel all orders."""
