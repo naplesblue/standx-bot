@@ -115,15 +115,20 @@ class State:
             now = time.time()
             cutoff = now - window_sec
             
-            # Note: iter(deque) is efficient, converting to list for slicing/math is acceptable 
-            # as long as we don't rebuild the whole list for pruning.
-            samples = [v for t, v in self.cex_volume_window if t > cutoff]
+            # Efficient O(k) reverse iteration
+            # Note: samples will be in reverse order (newest first)
+            samples = []
+            for t, v in reversed(self.cex_volume_window):
+                if t <= cutoff:
+                    break
+                samples.append(v)
 
             if len(samples) < min_samples + 1:
                 return 0.0, 0.0, 0.0, len(samples)
-
-            current = samples[-1]
-            baseline = samples[:-1]
+            
+            # samples[0] is current, samples[1:] is baseline
+            current = samples[0]
+            baseline = samples[1:]
             avg = sum(baseline) / len(baseline) if baseline else 0.0
             if avg <= 0:
                 return 0.0, current, avg, len(baseline)
