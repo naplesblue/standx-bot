@@ -115,26 +115,35 @@ class State:
             now = time.time()
             cutoff = now - window_sec
             
+            current = None
+            baseline_sum = 0.0
+            baseline_count = 0
+            sample_count = 0
+
             # Efficient O(k) reverse iteration
-            # Note: samples will be in reverse order (newest first)
-            samples = []
+            # Note: samples are processed newest first
             for t, v in reversed(self.cex_volume_window):
                 if t <= cutoff:
                     break
-                samples.append(v)
+                if current is None:
+                    current = v
+                else:
+                    baseline_sum += v
+                    baseline_count += 1
+                sample_count += 1
 
-            if len(samples) < min_samples + 1:
-                return 0.0, 0.0, 0.0, len(samples)
+            if current is None:
+                return 0.0, 0.0, 0.0, 0
+
+            if baseline_count < min_samples:
+                return 0.0, 0.0, 0.0, sample_count
             
-            # samples[0] is current, samples[1:] is baseline
-            current = samples[0]
-            baseline = samples[1:]
-            avg = sum(baseline) / len(baseline) if baseline else 0.0
+            avg = baseline_sum / baseline_count if baseline_count else 0.0
             if avg <= 0:
-                return 0.0, current, avg, len(baseline)
+                return 0.0, current, avg, baseline_count
 
             ratio = current / avg
-            return ratio, current, avg, len(baseline)
+            return ratio, current, avg, baseline_count
 
     def update_imbalance(self, bid_depth: float, ask_depth: float, window_sec: int = 10):
         """Update orderbook imbalance data and maintain sliding window.
@@ -176,17 +185,19 @@ class State:
             now = time.time()
             cutoff = now - window_sec
             
-            # Efficient O(k) reverse iteration
-            recent = []
+            # Efficient O(k) reverse iteration without list allocation
+            count = 0
+            imbalance_sum = 0.0
             for t, v in reversed(self.imbalance_window):
                 if t <= cutoff:
                     break
-                recent.append(v)
+                imbalance_sum += v
+                count += 1
             
-            if len(recent) < 3:  # Need at least 3 samples
+            if count < 3:  # Need at least 3 samples
                 return 0
             
-            avg_imbalance = sum(recent) / len(recent)
+            avg_imbalance = imbalance_sum / count
             
             if avg_imbalance > threshold:
                 return 1  # Buy pressure
@@ -219,30 +230,41 @@ class State:
                 return 0.0
                 
             now = time.time()
-            prices = []
+            min_p = None
+            max_p = None
+            current_price = None
+            sample_count = 0
             
             if window_sec:
                 cutoff = now - window_sec
-                # Efficient O(k) reverse iteration
-                # Note: collected prices will be in reverse chronological order (newest first)
-                # This doesn't affect min/max calculation
+                # Efficient O(k) reverse iteration without list allocation
                 for t, p in reversed(window):
                     if t <= cutoff:
                         break
-                    prices.append(p)
+                    if current_price is None:
+                        current_price = p
+                    if min_p is None or p < min_p:
+                        min_p = p
+                    if max_p is None or p > max_p:
+                        max_p = p
+                    sample_count += 1
             else:
-                prices = [p for _, p in window]
+                # Full window scan
+                for _, p in window:
+                    if min_p is None or p < min_p:
+                        min_p = p
+                    if max_p is None or p > max_p:
+                        max_p = p
+                    sample_count += 1
+                current_price = window[-1][1] if window else None
             
-            if len(prices) < 2:
+            if sample_count < 2 or current_price is None:
                 return 0.0
-            
-            # prices[0] is the newest price (since we iterated reversed)
-            current_price = prices[0]
             
             if current_price == 0:
                 return float("inf")
             
-            volatility = (max(prices) - min(prices)) / current_price * 10000
+            volatility = (max_p - min_p) / current_price * 10000
             return volatility
     
     def get_cex_amplitude(self, window_sec: int) -> float:
@@ -256,18 +278,20 @@ class State:
             
             now = time.time()
             cutoff = now - window_sec
-            
-            prices = []
+            min_p = None
+            max_p = None
+            sample_count = 0
             for t, p in reversed(self.cex_price_window):
                 if t <= cutoff:
                     break
-                prices.append(p)
+                if min_p is None or p < min_p:
+                    min_p = p
+                if max_p is None or p > max_p:
+                    max_p = p
+                sample_count += 1
             
-            if not prices:
+            if sample_count == 0 or min_p is None or max_p is None:
                 return 0.0
-            
-            max_p = max(prices)
-            min_p = min(prices)
             
             if min_p == 0: 
                 return 0.0
@@ -293,8 +317,8 @@ class State:
             True if velocity/trend detected, False otherwise
         """
         with self._lock:
-            direction = self._get_consecutive_direction(self.cex_price_window, window_sec, threshold_ticks)
-            return direction != 0
+            direction, count = self._get_consecutive_run(self.cex_price_window, window_sec)
+            return direction != 0 and count >= threshold_ticks
 
     def get_trend_direction(self, window_sec: float, threshold_ticks: int, source: str = "auto") -> int:
         """
@@ -305,27 +329,45 @@ class State:
             window = self._get_window(source)
             return self._get_consecutive_direction(window, window_sec, threshold_ticks)
 
+    def get_trend_run(self, window_sec: float, source: str = "auto") -> tuple[int, int]:
+        """
+        Return consecutive trend direction and count from newest ticks.
+        Direction: 1 for up, -1 for down, 0 for none; count: number of consecutive moves.
+        """
+        with self._lock:
+            window = self._get_window(source)
+            return self._get_consecutive_run(window, window_sec)
+
     def _get_consecutive_direction(self, window: list, window_sec: float, threshold_ticks: int) -> int:
-        if len(window) < threshold_ticks + 1:
-            return 0
+        direction, count = self._get_consecutive_run(window, window_sec)
+        if count >= threshold_ticks:
+            return direction
+        return 0
+
+    def _get_consecutive_run(self, window: list, window_sec: float) -> tuple[int, int]:
+        if len(window) < 2:
+            return 0, 0
 
         now = time.time()
         cutoff = now - window_sec
-
-        # Get recent ticks within window (in reverse order: newest first)
-        recent_ticks = [(t, p) for t, p in reversed(window) if t > cutoff]
-
-        if len(recent_ticks) < threshold_ticks + 1:
-            return 0
-
+        sample_count = 0
         target_count = 0
         direction = 0  # 1 for up, -1 for down
+        prev_p = None
 
-        for i in range(len(recent_ticks) - 1):
-            curr_p = recent_ticks[i][1]
-            prev_p = recent_ticks[i + 1][1]
+        # Iterate newest -> oldest, track consecutive direction without list allocation
+        for t, p in reversed(window):
+            if t <= cutoff:
+                break
+            if prev_p is None:
+                prev_p = p
+                sample_count = 1
+                continue
 
-            diff = curr_p - prev_p
+            sample_count += 1
+            diff = prev_p - p
+            prev_p = p
+
             if diff == 0:
                 continue
 
@@ -339,10 +381,10 @@ class State:
             else:
                 break
 
-            if target_count >= threshold_ticks:
-                return direction
+        if sample_count < 2:
+            return 0, 0
 
-        return 0
+        return direction, target_count
     
     def update_position(self, qty: float, entry_price: float = 0.0):
         """Update position quantity and entry price."""
@@ -468,5 +510,3 @@ class State:
                     to_cancel.append(order)
             
             return {'orders': to_cancel, 'cex_triggered_sides': cex_triggered_sides}
-
-

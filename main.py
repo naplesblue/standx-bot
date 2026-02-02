@@ -179,6 +179,18 @@ async def main(config_path: str):
                 logger.info(f"Imbalance Guard enabled: depth_levels={config.imbalance_depth_levels}, window={config.imbalance_window_sec}s")
         
         # Register order callback to detect fills
+        async def cancel_orphan_order(cl_ord_id: str, side: str):
+            try:
+                response = await maker.trading_client.cancel_order(cl_ord_id)
+                if response.get("code") == 0:
+                    maker.monitor.record_cancel()
+                    logger.warning(f"Orphan order cancel sent: {cl_ord_id}")
+                else:
+                    error_msg = response.get("message", str(response))
+                    logger.error(f"Orphan order cancel rejected: {cl_ord_id}: {error_msg}")
+            except Exception as e:
+                logger.error(f"Failed to cancel orphan order {cl_ord_id}: {e}")
+        
         def on_order(data):
             order_data = data.get("data", {})
             status = order_data.get("status")
@@ -257,6 +269,10 @@ async def main(config_path: str):
                         elif not current_order or current_order.cl_ord_id != cl_ord_id:
                             # Order is open but not tracked locally - DANGER! Cancel it immediately
                             logger.error(f"ORPHAN ORDER DETECTED: {cl_ord_id} is open but not tracked locally!")
+                            if cl_ord_id not in maker._pending_cancels:
+                                if side in ("buy", "sell"):
+                                    maker._pending_cancels[cl_ord_id] = side
+                                asyncio.create_task(cancel_orphan_order(cl_ord_id, side))
                     
                     if current_order and current_order.cl_ord_id == cl_ord_id:
                         if status.lower() in ("filled", "cancelled", "rejected"):

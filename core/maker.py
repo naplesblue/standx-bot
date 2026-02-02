@@ -35,19 +35,27 @@ def send_notify(title: str, message: str, priority: str = "normal"):
     if not notify_url:
         return  # Notification not configured
     
+    def _post():
+        try:
+            headers = {}
+            if notify_api_key:
+                headers["X-API-Key"] = notify_api_key
+            
+            requests.post(
+                notify_url,
+                json={"title": title, "message": message, "channel": "alert", "priority": priority},
+                headers=headers,
+                timeout=5,
+            )
+        except Exception:
+            pass  # Don't let notification failure affect trading
+    
     try:
-        headers = {}
-        if notify_api_key:
-            headers["X-API-Key"] = notify_api_key
-        
-        requests.post(
-            notify_url,
-            json={"title": title, "message": message, "channel": "alert", "priority": priority},
-            headers=headers,
-            timeout=5,
-        )
-    except:
-        pass  # Don't let notification failure affect trading
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _post()
+    else:
+        loop.create_task(asyncio.to_thread(_post))
 
 
 class Maker:
@@ -304,16 +312,12 @@ class Maker:
                 self.config.volume_min_samples,
             )
 
-        guard_trend_dir = self.state.get_trend_direction(
+        trend_dir, trend_count = self.state.get_trend_run(
             self.config.velocity_check_window_sec,
-            self.config.velocity_tick_threshold,
             source=trend_source,
         )
-        warn_trend_dir = self.state.get_trend_direction(
-            self.config.velocity_check_window_sec,
-            self.config.velocity_warn_tick_threshold,
-            source=trend_source,
-        )
+        guard_trend_dir = trend_dir if trend_count >= self.config.velocity_tick_threshold else 0
+        warn_trend_dir = trend_dir if trend_count >= self.config.velocity_warn_tick_threshold else 0
 
         # Step -1.8: Risk guard cooldown / recovery
         if self._risk_guard_active:
@@ -467,11 +471,7 @@ class Maker:
             if imbalance_warn_dir != 0:
                 direction = imbalance_warn_dir
             elif direction == 0:
-                direction = self.state.get_trend_direction(
-                    self.config.velocity_check_window_sec,
-                    1,
-                    source=trend_source,
-                )
+                direction = trend_dir if trend_count >= 1 else 0
 
             # Buy pressure (direction > 0) -> price going UP -> BUY order safe (price moves away), SELL order risky
             # Sell pressure (direction < 0) -> price going DOWN -> SELL order safe (price moves away), BUY order risky
@@ -744,16 +744,38 @@ class Maker:
         """Helper to cancel all orders."""
         try:
             orders_to_cancel = []
-            if self.state.has_order("buy"): orders_to_cancel.append(self.state.get_order("buy").cl_ord_id)
-            if self.state.has_order("sell"): orders_to_cancel.append(self.state.get_order("sell").cl_ord_id)
+            if self.state.has_order("buy"):
+                orders_to_cancel.append(self.state.get_order("buy"))
+            if self.state.has_order("sell"):
+                orders_to_cancel.append(self.state.get_order("sell"))
             
             if orders_to_cancel:
                 logger.warning(f"{reason}: Cancelling {len(orders_to_cancel)} orders...")
-                await self.client.cancel_orders(orders_to_cancel)
-                self.state.clear_all_orders()
-                for _ in orders_to_cancel: self.monitor.record_cancel()
+                all_ok = True
+                for order in orders_to_cancel:
+                    if not order:
+                        continue
+                    try:
+                        # Track as pending cancel to block new orders until WS confirms
+                        self._pending_cancels[order.cl_ord_id] = order.side
+                        response = await self.trading_client.cancel_order(order.cl_ord_id)
+                        if response.get("code") == 0:
+                            self.state.set_order(order.side, None)
+                            self.monitor.record_cancel()
+                        else:
+                            all_ok = False
+                            error_msg = response.get("message", str(response))
+                            logger.error(f"{reason}: Cancel rejected {order.cl_ord_id}: {error_msg}")
+                            self._pending_cancels.pop(order.cl_ord_id, None)
+                    except Exception as e:
+                        all_ok = False
+                        logger.error(f"{reason}: Failed to cancel {order.cl_ord_id}: {e}")
+                        self._pending_cancels.pop(order.cl_ord_id, None)
+                return all_ok
+            return True
         except Exception as e:
             logger.error(f"{reason}: Failed to cancel orders: {e}")
+            return False
 
     async def _activate_risk_guard(self, reason: str):
         """Activate risk guard, cancel orders, and start cooldown timer."""
@@ -972,6 +994,11 @@ class Maker:
                 f"qty={reduce_qty:.4f}, side={reduce_side}, uPNL=${upnl:.2f}"
             )
             
+            cancel_ok = await self._cancel_all_orders("Profit Take")
+            if not cancel_ok:
+                logger.warning("Profit take: cancel failed, skipping close to avoid orphan fills.")
+                return False
+            
             # Place market order to reduce
             cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
             qty_str = f"{reduce_qty:.3f}"
@@ -1028,6 +1055,7 @@ class Maker:
         try:
             # Try to calculate uPNL from WS data first (no HTTP needed)
             upnl = None
+            pos_qty = abs(self.state.position)
             if self.state.position != 0 and self.state.entry_price > 0:
                 mark_price = self.state.last_dex_price or 0
                 if mark_price > 0:
@@ -1040,7 +1068,11 @@ class Maker:
                 positions = await self.client.query_positions(self.config.symbol)
                 if not positions:
                     return False
-                upnl = positions[0].upnl
+                pos = positions[0]
+                upnl = pos.upnl
+                pos_qty = abs(pos.qty)
+                if abs(pos.qty - self.state.position) > 1e-6 or pos.entry_price != self.state.entry_price:
+                    self.state.update_position(pos.qty, pos.entry_price)
             
             # Check critical stop loss
             if upnl < -self.config.stop_loss_usd:
@@ -1051,15 +1083,26 @@ class Maker:
                 # 1. Cancel all orders
                 try:
                     open_orders = await self.client.query_open_orders(self.config.symbol)
+                    if not open_orders:
+                        self.state.clear_all_orders()
                     for order in open_orders:
-                        await self.trading_client.cancel_order(order.cl_ord_id)
-                        self.monitor.record_cancel()
-                    self.state.clear_all_orders()
+                        try:
+                            response = await self.trading_client.cancel_order(order.cl_ord_id)
+                            if response.get("code") == 0:
+                                self.monitor.record_cancel()
+                                current = self.state.get_order(order.side)
+                                if current and current.cl_ord_id == order.cl_ord_id:
+                                    self.state.set_order(order.side, None)
+                            else:
+                                error_msg = response.get("message", str(response))
+                                logger.error(f"StopLoss: Cancel rejected {order.cl_ord_id}: {error_msg}")
+                        except Exception as e:
+                            logger.error(f"StopLoss: Failed to cancel {order.cl_ord_id}: {e}")
                 except Exception as e:
                     logger.error(f"StopLoss: Failed to cancel orders: {e}")
                 
                 # 2. Close position (use state.position which is always available)
-                qty = abs(self.state.position)
+                qty = pos_qty
                 if qty > 0:
                     side = "sell" if self.state.position > 0 else "buy"
                     logger.critical(f"StopLoss: Closing position {qty} {side}")
