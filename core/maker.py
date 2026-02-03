@@ -8,6 +8,7 @@ import uuid
 import time
 import logging
 import asyncio
+from decimal import Decimal, ROUND_DOWN
 from typing import Optional
 
 import requests
@@ -839,6 +840,14 @@ class Maker:
     def _lerp(self, min_val: float, max_val: float, ratio: float) -> float:
         return min_val + (max_val - min_val) * ratio
 
+    def _format_qty(self, qty: float) -> str:
+        if qty <= 0:
+            return "0"
+        quant = Decimal("0.00000001")
+        dec = Decimal(str(qty)).quantize(quant, rounding=ROUND_DOWN)
+        qty_str = format(dec, "f").rstrip("0").rstrip(".")
+        return qty_str if qty_str else "0"
+
     def _get_volatility_ratio(self) -> tuple[float, float]:
         vol_bps = self.state.get_volatility_bps(
             window_sec=self.config.volatility_window_sec,
@@ -896,7 +905,10 @@ class Maker:
             aligned_price = math.ceil(price / tick_size) * tick_size
         price_str = f"{aligned_price:.{price_decimals}f}"
         order_qty = self.config.order_size_btc if qty is None else qty
-        qty_str = f"{order_qty:.3f}"
+        qty_str = self._format_qty(order_qty)
+        if qty_str == "0":
+            logger.warning(f"Skipping {side} order: qty too small ({order_qty})")
+            return
         
         # Pre-reserve order slot BEFORE sending request (prevents concurrent duplicates)
         self.state.set_order(side, OpenOrder(
@@ -1046,7 +1058,10 @@ class Maker:
             
             # Place market order to reduce
             cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
-            qty_str = f"{reduce_qty:.3f}"
+            qty_str = self._format_qty(reduce_qty)
+            if qty_str == "0":
+                logger.warning(f"Profit take skipped: qty too small ({reduce_qty})")
+                return False
             
             response = await self.trading_client.new_order(
                 symbol=self.config.symbol,
@@ -1156,7 +1171,7 @@ class Maker:
                         await self.trading_client.new_order(
                             symbol=self.config.symbol,
                             side=side,
-                            qty=f"{qty:.3f}",
+                            qty=self._format_qty(qty),
                             price="0",
                             order_type="market",
                             reduce_only=True,
