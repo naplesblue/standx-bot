@@ -24,6 +24,8 @@ class OpenOrder:
     side: str
     price: float
     qty: float
+    reduce_only: bool = False
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -460,13 +462,14 @@ class State:
             self.open_orders = {"buy": None, "sell": None}
             logger.info("All orders cleared")
     
-    def get_orders_to_cancel(self, buy_bounds: tuple, sell_bounds: tuple) -> dict:
+    def get_orders_to_cancel(self, buy_bounds: tuple, sell_bounds: tuple, min_rest_sec: float = 0.0) -> dict:
         """
         Get orders that need to be cancelled due to price distance.
         
         Args:
             buy_bounds: (min_dist, max_dist) for buy orders
             sell_bounds: (min_dist, max_dist) for sell orders
+            min_rest_sec: Minimum seconds to keep a fresh order resting before near-cancel checks
             
         Returns:
             dict with:
@@ -479,6 +482,7 @@ class State:
             
             to_cancel = []
             cex_triggered_sides = []
+            now = time.time()
             
             for side, order in self.open_orders.items():
                 if order is None:
@@ -492,6 +496,18 @@ class State:
                 
                 # Calculate distance from DEX price (primary reference for order placement)
                 dex_distance_bps = abs(order.price - self.last_dex_price) / self.last_dex_price * 10000
+                order_age = max(0.0, now - getattr(order, "created_at", now))
+
+                # Exit orders should not be pulled when price gets close / crosses.
+                # Keep only "too far" repricing logic to preserve fill probability.
+                if order.reduce_only:
+                    if dex_distance_bps > max_dist:
+                        logger.warning(
+                            f"Exit order too far (DEX): {side} @ {order.price:.2f}, "
+                            f"dex={self.last_dex_price:.2f}, distance={dex_distance_bps:.2f}bps > {max_dist:.2f}bps"
+                        )
+                        to_cancel.append(order)
+                    continue
                 
                 # CEX check: only trigger cancel when CEX HAS CROSSED or is ABOUT TO CROSS the order
                 # Use a tight threshold (2 bps) to avoid false positives from normal DEX/CEX spread
@@ -519,11 +535,19 @@ class State:
                                 f"gap={cex_to_order_bps:.2f}bps"
                             )
                 
-                # Decision: cancel if DEX says too close OR CEX is in danger zone
-                if dex_distance_bps < min_dist:
+                # Decision: cancel if DEX says too close OR CEX is in danger zone.
+                # Use a near-cancel hysteresis to keep orders closer to market for better maker fill quality.
+                near_cancel_bps = max(0.0, min_dist * 0.8)
+                if dex_distance_bps < near_cancel_bps:
+                    if min_rest_sec > 0 and order_age < min_rest_sec:
+                        logger.debug(
+                            f"Keep fresh order near market: {side} @ {order.price:.2f}, "
+                            f"age={order_age:.2f}s < rest={min_rest_sec:.2f}s, distance={dex_distance_bps:.2f}bps"
+                        )
+                        continue
                     logger.warning(
                         f"Order too close (DEX): {side} @ {order.price:.2f}, "
-                        f"dex={self.last_dex_price:.2f}, distance={dex_distance_bps:.2f}bps < {min_dist:.2f}bps"
+                        f"dex={self.last_dex_price:.2f}, distance={dex_distance_bps:.2f}bps < {near_cancel_bps:.2f}bps"
                     )
                     to_cancel.append(order)
                 elif cex_in_danger:

@@ -275,7 +275,7 @@ async def main(config_path: str):
                                 asyncio.create_task(cancel_orphan_order(cl_ord_id, side))
                     
                     if current_order and current_order.cl_ord_id == cl_ord_id:
-                        if status.lower() in ("filled", "cancelled", "rejected"):
+                        if status.lower() in ("filled", "cancelled", "canceled", "rejected"):
                             logger.info(f"Order {status}: clearing {side} from state")
                             state.set_order(side, None)
                         elif status.lower() == "partially_filled":

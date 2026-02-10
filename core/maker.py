@@ -129,6 +129,7 @@ class Maker:
                     side="buy",
                     price=float(order.price),
                     qty=float(order.qty),
+                    reduce_only=bool(getattr(order, "reduce_only", False)),
                 ))
             elif order.side == "sell":
                 self.state.set_order("sell", OpenOrder(
@@ -136,6 +137,7 @@ class Maker:
                     side="sell",
                     price=float(order.price),
                     qty=float(order.qty),
+                    reduce_only=bool(getattr(order, "reduce_only", False)),
                 ))
         
         logger.info(
@@ -277,6 +279,11 @@ class Maker:
         # Step -2.5: Stop loss check (prioritize)
         stop_triggered = await self._check_stop_loss()
         if stop_triggered:
+            return
+
+        # Step -2.4: Profit take check (must run before guard early-returns)
+        reduced = await self._check_and_reduce_position()
+        if reduced:
             return
 
         # Step -2: DEX Staleness Guard
@@ -536,12 +543,6 @@ class Maker:
         if cooldown_active:
            logger.debug(f"Cool-down active: {time_since_fill:.1f}s < {self.config.fill_cooldown_sec}s")
         
-        # Step 1: Check if should reduce position (> 50% and profitable)
-        # We do this BEFORE max position check to allow exiting even if full
-        reduced = await self._check_and_reduce_position()
-        if reduced:
-            return  # Skip this tick after reducing
-
         # If in cooldown and no position, skip new orders
         if cooldown_active and self.state.position == 0:
             return
@@ -585,7 +586,11 @@ class Maker:
             )
         
         # Step 3: Check and cancel orders
-        cancel_result = self.state.get_orders_to_cancel(buy_bounds, sell_bounds)
+        cancel_result = self.state.get_orders_to_cancel(
+            buy_bounds,
+            sell_bounds,
+            min_rest_sec=self.config.maker_min_rest_sec,
+        )
         orders_to_cancel = cancel_result['orders']
         cex_triggered_sides = cancel_result['cex_triggered_sides']
 
@@ -848,6 +853,37 @@ class Maker:
         qty_str = format(dec, "f").rstrip("0").rstrip(".")
         return qty_str if qty_str else "0"
 
+    def _required_profit_usd(self, qty: float) -> float:
+        """Estimate minimum uPNL required to close with net profit."""
+        custom_threshold = float(getattr(self.config, "min_profit_usd", 0.0) or 0.0)
+        if qty <= 0:
+            return custom_threshold
+        ref_price = self.state.last_dex_price or self.state.last_cex_price or self.state.entry_price or 0.0
+        if ref_price <= 0:
+            return custom_threshold
+        notional = qty * ref_price
+        close_fee = notional * self.config.taker_fee_rate
+        profit_buffer = notional * (self.config.min_profit_bps / 10000)
+        return max(custom_threshold, close_fee + profit_buffer)
+
+    async def _wait_for_flat_position(self, retries: int = 5, delay_sec: float = 0.4) -> bool:
+        """Confirm position is flat on exchange before mutating local state."""
+        for i in range(retries):
+            try:
+                positions = await self.client.query_positions(self.config.symbol)
+                if not positions:
+                    self.state.update_position(0.0, 0.0)
+                    return True
+                pos = positions[0]
+                self.state.update_position(pos.qty, pos.entry_price)
+                if abs(pos.qty) < 1e-8:
+                    return True
+            except Exception as e:
+                logger.warning(f"Position confirm attempt {i + 1}/{retries} failed: {e}")
+            if i < retries - 1:
+                await asyncio.sleep(delay_sec)
+        return False
+
     def _get_volatility_ratio(self) -> tuple[float, float]:
         vol_bps = self.state.get_volatility_bps(
             window_sec=self.config.volatility_window_sec,
@@ -914,8 +950,9 @@ class Maker:
         self.state.set_order(side, OpenOrder(
             cl_ord_id=cl_ord_id,
             side=side,
-            price=price,
+            price=aligned_price,
             qty=order_qty,
+            reduce_only=reduce_only,
         ))
         
         logger.info(f"Placing {side} order: {qty_str} @ {price_str} (cl_ord_id: {cl_ord_id})")
@@ -997,102 +1034,116 @@ class Maker:
         # If we have ANY position and are in profit (covering taker fees), CLOSE IT.
         # This overrides the "threshold" logic.
         
-        # If config doesn't have min_profit_usd, default to 0 (or safe small value)
-        min_profit_usd = getattr(self.config, 'min_profit_usd', 0.0)
-        
+        if self._pending_close:
+            return False
+
         current_pos = abs(self.state.position)
         if current_pos == 0:
             return False
-        
+
         # Rate limit: max once every 5 seconds
         now = time.time()
-        if hasattr(self, '_last_profit_take_check_time'):
+        if hasattr(self, "_last_profit_take_check_time"):
             if now - self._last_profit_take_check_time < 5.0:
                 return False
         self._last_profit_take_check_time = now
-        
-        # Check uPNL - try WS data first
+
         try:
             upnl = None
-            if self.state.entry_price > 0:
-                mark_price = self.state.last_dex_price or 0
+
+            # Prefer exchange uPNL to avoid stale local mark-price decisions.
+            try:
+                positions = await self.client.query_positions(self.config.symbol)
+                if positions:
+                    pos = positions[0]
+                    if abs(pos.qty - self.state.position) > 1e-6 or pos.entry_price != self.state.entry_price:
+                        self.state.update_position(pos.qty, pos.entry_price)
+                    current_pos = abs(pos.qty)
+                    if current_pos == 0:
+                        return False
+                    upnl = pos.upnl
+                else:
+                    self.state.update_position(0.0, 0.0)
+                    return False
+            except Exception as e:
+                logger.warning(f"Profit take: query_positions failed, falling back to local calc: {e}")
+
+            # Fallback to local estimate only when exchange query is unavailable.
+            if upnl is None and self.state.entry_price > 0:
+                mark_price = self.state.last_dex_price or 0.0
                 if mark_price > 0:
                     upnl = (mark_price - self.state.entry_price) * self.state.position
-            
-            # Fallback to HTTP if WS data unavailable
-            if upnl is None:
-                positions = await self.client.query_positions(self.config.symbol)
-                if not positions:
-                    return False
-                upnl = positions[0].upnl
-            
-            # CONDITION: Profit > Min Threshold
-            # We treat this as a "Panic Exit" or "Opportunity Exit" to clear inventory.
-            should_reduce = False
-            
-            if upnl > min_profit_usd:
-                 # Only reduce if we are holding position
-                 should_reduce = True
-                 logger.info(f"Aggressive Profit Take: uPNL ${upnl:.2f} > ${min_profit_usd:.2f}")
 
-            if not should_reduce:
+            required_profit_usd = self._required_profit_usd(current_pos)
+            if upnl is None or upnl <= required_profit_usd:
+                logger.debug(
+                    f"Profit take skipped: uPNL=${upnl if upnl is not None else 'NA'} <= required=${required_profit_usd:.4f}"
+                )
                 return False
-            # Calculate reduce quantity (Full Close)
-            reduce_qty = current_pos
-            
-            # Determine side
-            if self.state.position > 0:
-                reduce_side = "sell"
-            else:
-                reduce_side = "buy"
-            
+
+            logger.info(f"Aggressive Profit Take: uPNL ${upnl:.2f} > ${required_profit_usd:.2f}")
+
+            reduce_qty = abs(self.state.position)
+            if reduce_qty <= 0:
+                return False
+            reduce_side = "sell" if self.state.position > 0 else "buy"
+
             logger.info(
                 f"Closing position (Market): {self.state.position:+.4f}, "
                 f"qty={reduce_qty:.4f}, side={reduce_side}, uPNL=${upnl:.2f}"
             )
-            
-            cancel_ok = await self._cancel_all_orders("Profit Take")
-            if not cancel_ok:
-                logger.warning("Profit take: cancel failed, skipping close to avoid orphan fills.")
-                return False
-            
-            # Place market order to reduce
-            cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
-            qty_str = self._format_qty(reduce_qty)
-            if qty_str == "0":
-                logger.warning(f"Profit take skipped: qty too small ({reduce_qty})")
-                return False
-            
-            response = await self.trading_client.new_order(
-                symbol=self.config.symbol,
-                side=reduce_side,
-                qty=qty_str,
-                price="0",  # Market order
-                cl_ord_id=cl_ord_id,
-                order_type="market",
-                reduce_only=True,
-            )
-            
-            if response.get("code") == 0 or "id" in response:
-                logger.info(f"Close order placed: {cl_ord_id}")
-                self.monitor.record_order()
-                self._write_reduce_log("CLOSE", -reduce_qty if reduce_side == "sell" else reduce_qty, f"aggressive_exit_upnl_{upnl:.2f}")
-                
-                # Immediately sync local state to prevent duplicate close attempts
-                self.state.update_position(0, 0.0)
-                self.state.clear_all_orders()
-                
-                send_notify(
-                    "仓位止盈 (Market)",
-                    f"{self.config.symbol} 市价止盈 {reduce_qty:.4f}，uPNL=${upnl:.2f}",
-                    priority="normal"
+
+            self._pending_close = True
+            try:
+                cancel_ok = await self._cancel_all_orders("Profit Take")
+                if not cancel_ok:
+                    logger.warning("Profit take: cancel failed, proceeding with reduce-only market close.")
+
+                cl_ord_id = f"reduce-{uuid.uuid4().hex[:8]}"
+                qty_str = self._format_qty(reduce_qty)
+                if qty_str == "0":
+                    logger.warning(f"Profit take skipped: qty too small ({reduce_qty})")
+                    return False
+
+                response = await self.trading_client.new_order(
+                    symbol=self.config.symbol,
+                    side=reduce_side,
+                    qty=qty_str,
+                    price="0",  # Market order
+                    cl_ord_id=cl_ord_id,
+                    order_type="market",
+                    reduce_only=True,
                 )
-                return True
-            else:
+
+                if response.get("code") == 0 or "id" in response:
+                    logger.info(f"Close order placed: {cl_ord_id}")
+                    self.monitor.record_order()
+                    self._write_reduce_log(
+                        "CLOSE",
+                        -reduce_qty if reduce_side == "sell" else reduce_qty,
+                        f"aggressive_exit_upnl_{upnl:.2f}",
+                    )
+
+                    if not await self._wait_for_flat_position():
+                        logger.warning("Profit take close submitted but position not flat yet; will retry.")
+                        return False
+                    self.state.clear_all_orders()
+
+                    send_notify(
+                        "仓位止盈 (Market)",
+                        f"{self.config.symbol} 市价止盈 {reduce_qty:.4f}，uPNL=${upnl:.2f}",
+                        priority="normal",
+                    )
+                    return True
+
                 logger.error(f"Close order failed: {response}")
-                    
+                return False
+            finally:
+                self._pending_close = False
+
         except Exception as e:
             logger.error(f"Failed to check/reduce position: {e}")
+        return False
     
     async def _check_stop_loss(self) -> bool:
         """
@@ -1139,65 +1190,93 @@ class Maker:
                 logger.critical(
                     f"STOP LOSS TRIGGERED: uPNL ${upnl:.2f} < -${self.config.stop_loss_usd:.2f}"
                 )
-                
-                # 1. Cancel all orders
+                self._pending_close = True
                 try:
-                    open_orders = await self.client.query_open_orders(self.config.symbol)
-                    if not open_orders:
-                        self.state.clear_all_orders()
-                    for order in open_orders:
-                        try:
-                            response = await self.trading_client.cancel_order(order.cl_ord_id)
-                            if response.get("code") == 0:
-                                self.monitor.record_cancel()
-                                current = self.state.get_order(order.side)
-                                if current and current.cl_ord_id == order.cl_ord_id:
-                                    self.state.set_order(order.side, None)
-                            else:
-                                error_msg = response.get("message", str(response))
-                                logger.error(f"StopLoss: Cancel rejected {order.cl_ord_id}: {error_msg}")
-                        except Exception as e:
-                            logger.error(f"StopLoss: Failed to cancel {order.cl_ord_id}: {e}")
-                except Exception as e:
-                    logger.error(f"StopLoss: Failed to cancel orders: {e}")
-                
-                # 2. Close position (use state.position which is always available)
-                qty = pos_qty
-                if qty > 0:
-                    side = "sell" if self.state.position > 0 else "buy"
-                    logger.critical(f"StopLoss: Closing position {qty} {side}")
-                    
+                    # 1. Cancel all orders
                     try:
-                        await self.trading_client.new_order(
-                            symbol=self.config.symbol,
-                            side=side,
-                            qty=self._format_qty(qty),
-                            price="0",
-                            order_type="market",
-                            reduce_only=True,
-                            cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
-                        )
-                        self.monitor.record_order()
-                        
-                        # Immediately sync local state to prevent duplicate close attempts
-                        self.state.update_position(0, 0.0)
-                        
+                        open_orders = await self.client.query_open_orders(self.config.symbol)
+                        if not open_orders:
+                            self.state.clear_all_orders()
+                        for order in open_orders:
+                            try:
+                                response = await self.trading_client.cancel_order(order.cl_ord_id)
+                                if response.get("code") == 0:
+                                    self.monitor.record_cancel()
+                                    current = self.state.get_order(order.side)
+                                    if current and current.cl_ord_id == order.cl_ord_id:
+                                        self.state.set_order(order.side, None)
+                                else:
+                                    error_msg = response.get("message", str(response))
+                                    logger.error(f"StopLoss: Cancel rejected {order.cl_ord_id}: {error_msg}")
+                            except Exception as e:
+                                logger.error(f"StopLoss: Failed to cancel {order.cl_ord_id}: {e}")
                     except Exception as e:
-                        logger.error(f"StopLoss: Failed to close position: {e}")
-                
-                # 3. Notify and Enter Recovery Mode
-                send_notify(
-                    "紧急止损触发!", 
-                    f"触发止损 ${self.config.stop_loss_usd}，当前亏损 ${upnl:.2f}。进入恢复模式，暂停 {self.config.stop_loss_cooldown_sec}秒。",
-                    priority="high"
-                )
-                
-                logger.critical(f"Stop loss executed. Entering recovery mode (wait {self.config.stop_loss_cooldown_sec}s)...")
-                self._stop_loss_active = True
-                self._pending_close = False  # Reset pending close flag
-                self._next_recovery_check = time.time() + self.config.stop_loss_cooldown_sec
-                
-                return True
+                        logger.error(f"StopLoss: Failed to cancel orders: {e}")
+
+                    # Re-sync position side/qty from exchange before closing.
+                    try:
+                        latest_positions = await self.client.query_positions(self.config.symbol)
+                        if latest_positions:
+                            latest_pos = latest_positions[0]
+                            pos_qty = abs(latest_pos.qty)
+                            self.state.update_position(latest_pos.qty, latest_pos.entry_price)
+                        else:
+                            pos_qty = 0.0
+                            self.state.update_position(0.0, 0.0)
+                    except Exception as e:
+                        logger.warning(f"StopLoss: query_positions before close failed, using local state: {e}")
+                        pos_qty = abs(self.state.position)
+
+                    # 2. Close position
+                    qty = pos_qty
+                    if qty <= 0:
+                        logger.warning("StopLoss: no position to close after sync; entering recovery mode.")
+                    else:
+                        side = "sell" if self.state.position > 0 else "buy"
+                        qty_str = self._format_qty(qty)
+                        if qty_str == "0":
+                            logger.error(f"StopLoss: close qty too small ({qty})")
+                            return False
+
+                        logger.critical(f"StopLoss: Closing position {qty} {side}")
+                        try:
+                            response = await self.trading_client.new_order(
+                                symbol=self.config.symbol,
+                                side=side,
+                                qty=qty_str,
+                                price="0",
+                                order_type="market",
+                                reduce_only=True,
+                                cl_ord_id=f"stoploss-{uuid.uuid4().hex[:8]}"
+                            )
+                        except Exception as e:
+                            logger.error(f"StopLoss: Failed to close position: {e}")
+                            return False
+
+                        if not (response.get("code") == 0 or "id" in response):
+                            logger.error(f"StopLoss: Close order rejected: {response}")
+                            return False
+                        self.monitor.record_order()
+
+                        if not await self._wait_for_flat_position():
+                            logger.error("StopLoss: close submitted but position not flat yet; retry next tick.")
+                            return False
+
+                    # 3. Notify and Enter Recovery Mode (only after close is confirmed)
+                    send_notify(
+                        "紧急止损触发!",
+                        f"触发止损 ${self.config.stop_loss_usd}，当前亏损 ${upnl:.2f}。进入恢复模式，暂停 {self.config.stop_loss_cooldown_sec}秒。",
+                        priority="high"
+                    )
+
+                    logger.critical(f"Stop loss executed. Entering recovery mode (wait {self.config.stop_loss_cooldown_sec}s)...")
+                    self._stop_loss_active = True
+                    self.state.update_position(0, 0.0)
+                    self.state.clear_all_orders()
+                    self._next_recovery_check = time.time() + self.config.stop_loss_cooldown_sec
+                    return True
+                finally:
+                    self._pending_close = False
                 
         except Exception as e:
             logger.error(f"Error checking stop loss: {type(e).__name__}: {e}")
